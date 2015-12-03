@@ -151,6 +151,23 @@ namespace LiveMemTracer
 		return (void*)(size_t(ptr) + HEADER_SIZE);
 	}
 
+	void *allocAligned(size_t size, size_t alignment)
+	{
+		Chunk *chunk = getChunck();
+		if (chunkIsFull(chunk))
+		{
+			chunk = getNextChunk();
+			if (!chunk)
+			{
+				// TODO WAIT
+			}
+		}
+		void *ptr = _aligned_offset_malloc(size + HEADER_SIZE, alignment, HEADER_SIZE);
+		Header *header = (Header*)(ptr);
+		logAllocInChunk(chunk, header, size);
+		return (void*)(size_t(ptr) + HEADER_SIZE);
+	}
+
 	void dealloc(void *ptr)
 	{
 		Chunk *chunk = getChunck();
@@ -166,5 +183,22 @@ namespace LiveMemTracer
 		Header *header = (Header*)(offset);
 		logFreeInChunk(chunk, header);
 		free(offset);
+	}
+
+	void deallocAligned(void *ptr)
+	{
+		Chunk *chunk = getChunck();
+		if (chunkIsFull(chunk))
+		{
+			chunk = getNextChunk();
+			if (!chunk)
+			{
+				// TODO WAIT
+			}
+		}
+		void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
+		Header *header = (Header*)(offset);
+		logFreeInChunk(chunk, header);
+		_aligned_free(offset);
 	}
 }
