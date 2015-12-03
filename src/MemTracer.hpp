@@ -4,6 +4,7 @@
 #include <cstdlib>    //malloc etc...
 #include <string>     //memset
 #include <Windows.h>  //CaptureStackBackTrace
+#include <atomic>     //std::atomic
 
 namespace LiveMemTracer
 {
@@ -14,20 +15,27 @@ namespace LiveMemTracer
 
 	typedef uint32_t Hash;
 
+	enum ChunkStatus
+	{
+		TREATED = 0,
+		PENDING
+	};
+
 	struct Chunk
 	{
-		int32_t     allocSize[ALLOC_NUMBER_PER_CHUNK];
-		Hash        allocHash[ALLOC_NUMBER_PER_CHUNK];
-		void       *allocStack[ALLOC_NUMBER_PER_CHUNK];
-		uint8_t     allocStackSize[ALLOC_NUMBER_PER_CHUNK];
-		void       *stackBuffer[ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC];
-		uint32_t    allocIndex;
-		uint32_t    stackIndex;
+		int32_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
+		Hash          allocHash[ALLOC_NUMBER_PER_CHUNK];
+		void         *allocStack[ALLOC_NUMBER_PER_CHUNK];
+		uint8_t       allocStackSize[ALLOC_NUMBER_PER_CHUNK];
+		void         *stackBuffer[ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC];
+		uint32_t      allocIndex;
+		uint32_t      stackIndex;
+		std::atomic<ChunkStatus> treated;
 	};
 
 	struct Header
 	{
-		Hash     hash;
+		Hash    hash;
 		int32_t size;
 	};
 
@@ -37,9 +45,16 @@ namespace LiveMemTracer
 	__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
 	__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
+	__declspec(thread) static bool                      g_th_initialized = false;
 
 	static Chunk *getChunck()
 	{
+		if (!g_th_initialized)
+		{
+			memset(g_th_chunks, 0, sizeof(g_th_chunks));
+			memset(g_th_cache, 0, sizeof(g_th_cache));
+			g_th_initialized = true;
+		}
 		return &g_th_chunks[g_th_chunkIndex];
 	}
 
@@ -53,9 +68,25 @@ namespace LiveMemTracer
 
 	static Chunk *getNextChunk()
 	{
+		Chunk *currentChunk = getChunck();
+		if (chunkIsFull(currentChunk) == false)
+		{
+			assert(false && "Why did you called me if current chunk is not full ?");
+		}
+		assert(currentChunk->treated.load() == ChunkStatus::TREATED && "Why did you called me if current chunk is already pending ?");
+
 		g_th_chunkIndex = (g_th_chunkIndex + 1) % CHUNK_NUMBER;
 		Chunk *chunk = getChunck();
-		// check if chunk has been treated
+
+		while (chunk->treated.load() == ChunkStatus::PENDING)
+		{
+			//TODO wait or treat it
+		}
+
+		g_th_cacheIndex = 0;
+		memset(g_th_cache, 0, sizeof(g_th_cache));
+		chunk->allocIndex = 0;
+		chunk->stackIndex = 0;
 		return chunk;
 	}
 
@@ -91,7 +122,6 @@ namespace LiveMemTracer
 			for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
 				stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
 			stack[0] = (void*)~0;
-			// On n'a pas tout choppe
 		}
 
 		size_t index = chunk->allocIndex;
