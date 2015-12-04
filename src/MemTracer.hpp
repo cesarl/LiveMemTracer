@@ -29,6 +29,7 @@ static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
 #include <Windows.h>  //CaptureStackBackTrace
 
 #include <unordered_map>
+#include <algorithm>
 #include <mutex>
 #endif
 
@@ -71,6 +72,7 @@ namespace LiveMemTracer
 	static inline void deallocAligned(void *ptr);
 
 	static void treatChunk(Chunk *chunk);
+	static void updateTree(size_t index, int32_t size);
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
@@ -85,6 +87,37 @@ namespace LiveMemTracer
 			uint32_t stackSize;
 		};
 
+		/*
+		hash : main -> new A -> new B -> new C
+		hash : main -> new B -> new C
+		hash : main -> new B -> new C
+
+		main  7
+		new A 1 (1 x 1)
+		new B 4 (2 x 2)
+		new C 2 (2 x 1)
+		new D 2 (2 x 1)
+
+		main 9
+		    new A 5
+			    new B 4
+				    new C 1
+					new D 1
+			new B 4
+			   new C 1
+			   new D 1
+
+		[]main
+		    - new A
+			    [] new A
+			- new B 4
+			    [] new B
+				- new C 1
+				    [] new C
+				- new D 1
+				    [] new D
+	    */
+
 		__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
 		__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
 		__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
@@ -94,6 +127,20 @@ namespace LiveMemTracer
 		static std::unordered_map<void*, const char *>      g_hashStackRefTable;
 		static std::unordered_map<Hash, size_t>             g_allocIndexRefTable;
 		static std::vector<Alloc>                           g_allocList;
+
+		struct Edge
+		{
+			const char *from;
+			const char *to;
+			int32_t      counter;
+			bool operator==(const char *o) const { return from == o; }
+			bool operator<(const Edge &o) const { return from < o.from; }
+			bool operator<(const char *o) const { return from < o; }
+		};
+
+		typedef std::unordered_map<const char *, std::vector<Edge>> Tree;
+
+		static Tree                                         g_tree;
 		static std::mutex                                   g_mutex;
 
 		static inline Chunk *getChunck();
@@ -205,6 +252,38 @@ namespace SymbolGetter
 	}
 };
 
+
+void LiveMemTracer::updateTree(size_t index, int32_t size)
+{
+	Private::Alloc &alloc = Private::g_allocList[index];
+	int stackSize = alloc.stackSize;
+	stackSize -= 1;
+	while (stackSize >= 0)
+	{
+		auto from = Private::g_tree.find(alloc.stackStr[stackSize]);
+		if (from == std::end(Private::g_tree))
+		{
+			Private::g_tree.insert(std::make_pair(alloc.stackStr[stackSize], std::vector<Private::Edge>()));
+			from = Private::g_tree.find(alloc.stackStr[stackSize]);
+		}
+
+		auto edge = std::lower_bound(std::begin(from->second), std::end(from->second), alloc.stackStr[stackSize + 1]);
+		if (edge != std::end(from->second) && edge->from == alloc.stackStr[stackSize + 1])
+		{
+			edge->counter += size;
+		}
+		else
+		{
+			Private::Edge newEdge;
+			newEdge.from = alloc.stackStr[stackSize + 1];
+			newEdge.to = alloc.stackStr[stackSize];
+			newEdge.counter = size;
+			from->second.insert(std::upper_bound(std::begin(from->second), std::end(from->second), newEdge), newEdge);
+		}
+		--stackSize;
+	}
+}
+
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
@@ -214,6 +293,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		if (it != std::end(Private::g_allocIndexRefTable))
 		{
 			Private::g_allocList[it->second].counter += chunk->allocSize[i];
+			updateTree(it->second, chunk->allocSize[i]);
 			continue;
 		}
 		Private::Alloc alloc;
@@ -233,9 +313,12 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			Private::g_hashStackRefTable.insert(std::make_pair(addr, alloc.stackStr[j]));
 		}
 		alloc.stackSize = chunk->allocStackSize[i];
-		Private::g_allocIndexRefTable.insert(std::make_pair(alloc.hash, Private::g_allocList.size()));
+		size_t index = Private::g_allocList.size();
+		Private::g_allocIndexRefTable.insert(std::make_pair(alloc.hash, index));
 		Private::g_allocList.push_back(alloc);
+		updateTree(index, chunk->allocSize[i]);
 	}
+
 	chunk->treated.store(ChunkStatus::TREATED);
 }
 
@@ -320,12 +403,12 @@ void LiveMemTracer::Private::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMe
 {
 	Hash hash;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = CaptureStackBackTrace(4, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
+	uint32_t count = CaptureStackBackTrace(3, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
 
 	if (count == STACK_SIZE_PER_ALLOC)
 	{
 		void* tmpStack[500];
-		uint32_t tmpSize = CaptureStackBackTrace(4, 500, tmpStack, (PDWORD)&hash);
+		uint32_t tmpSize = CaptureStackBackTrace(3, 500, tmpStack, (PDWORD)&hash);
 
 		for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
 			stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
@@ -344,10 +427,11 @@ void LiveMemTracer::Private::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMe
 	chunk->allocStack[index] = chunk->stackBuffer[chunk->stackIndex];
 	chunk->allocSize[index] = size;
 	chunk->allocHash[index] = hash;
-	chunk->allocStackSize[index] = count;
-	g_th_cache[g_th_cacheIndex++] = hash;
+	chunk->allocStackSize[index] = count - 3;
+	g_th_cache[g_th_cacheIndex] = hash;
+	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
 	chunk->allocIndex += 1;
-	chunk->stackIndex += count;
+	chunk->stackIndex += count - 3;
 
 	header->size = size;
 	header->hash = hash;
@@ -364,7 +448,8 @@ void LiveMemTracer::Private::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMem
 		return;
 	}
 
-	g_th_cache[g_th_cacheIndex++] = header->hash;
+	g_th_cache[g_th_cacheIndex] = header->hash;
+	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
 	chunk->allocStack[index] = nullptr;
 	chunk->allocSize[index] = -header->size;
 	chunk->allocHash[index] = header->hash;
