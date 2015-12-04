@@ -186,17 +186,17 @@ namespace SymbolGetter
 	static const char *getSymbol(void *ptr)
 	{
 		init();
-
+		
 		DWORD64 dwDisplacement = 0;
 		DWORD64 dwAddress = DWORD64(ptr);
 		HANDLE hProcess = GetCurrentProcess();
-
+		
 		char pSymbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
 		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)pSymbolBuffer;
-
+		
 		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
 		pSymbol->MaxNameLen = MAX_SYM_NAME;
-
+		
 		if (!SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
 		{
 			return NULL;
@@ -371,5 +371,39 @@ void LiveMemTracer::Private::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMem
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
 }
+
+//#include <iostream>
+//#include <fstream>
+//
+//void printStack()
+//{
+//	// Quote from Microsoft Documentation:
+//	// ## Windows Server 2003 and Windows XP:  
+//	// ## The sum of the FramesToSkip and FramesToCapture parameters must be less than 63.
+//	const int kMaxCallers = 62;
+//
+//	void         * callers_stack[kMaxCallers];
+//	unsigned short frames;
+//	SYMBOL_INFO  * symbol;
+//	HANDLE         process;
+//	process = GetCurrentProcess();
+//	SymInitialize(process, NULL, TRUE);
+//	frames = CaptureStackBackTrace(0, kMaxCallers, callers_stack, NULL);
+//	symbol = (SYMBOL_INFO *)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+//	symbol->MaxNameLen = 255;
+//	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+//
+//	//out << "(" << sample_address << "): " << std::endl;
+//	const unsigned short  MAX_CALLERS_SHOWN = 6;
+//	frames = frames < MAX_CALLERS_SHOWN ? frames : MAX_CALLERS_SHOWN;
+//	for (unsigned int i = 0; i < frames; i++)
+//	{
+//		SymFromAddr(process, (DWORD64)(callers_stack[i]), 0, symbol);
+//		printf("*** %d: %s 0x%0X\n", i, symbol->Name, symbol->Address);
+//		//out << "*** " << i << ": " << callers_stack[i] << " " << symbol->Name << " - 0x" << symbol->Address << std::endl;
+//	}
+//
+//	free(symbol);
+//}
 
 #endif
