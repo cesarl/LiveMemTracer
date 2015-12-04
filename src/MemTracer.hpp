@@ -173,7 +173,7 @@ namespace SymbolGetter
 		{
 			HANDLE hProcess;
 
-			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+			SymSetOptions(SYMOPT_UNDNAME);
 
 			hProcess = GetCurrentProcess();
 			if (!SymInitialize(hProcess, NULL, TRUE))
@@ -268,10 +268,15 @@ LiveMemTracer::Chunk *LiveMemTracer::Private::getNextChunk()
 	{
 		assert(false && "Why did you called me if current chunk is not full ?");
 	}
-	assert(currentChunk->treated.load() == ChunkStatus::TREATED && "Why did you called me if current chunk is already pending ?");
-
-	currentChunk->treated.store(ChunkStatus::PENDING);
-	LMT_TREAT_CHUNK(currentChunk);
+	if (currentChunk->treated.load() == ChunkStatus::PENDING)
+	{
+		// That's a recursive call, so we go to the next chunk
+	}
+	else
+	{
+		currentChunk->treated.store(ChunkStatus::PENDING);
+		LMT_TREAT_CHUNK(currentChunk);
+	}
 
 	g_th_chunkIndex = (g_th_chunkIndex + 1) % CHUNK_NUMBER;
 	Chunk *chunk = Private::getChunck();
@@ -315,12 +320,12 @@ void LiveMemTracer::Private::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMe
 {
 	Hash hash;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = CaptureStackBackTrace(3, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
+	uint32_t count = CaptureStackBackTrace(4, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
 
 	if (count == STACK_SIZE_PER_ALLOC)
 	{
 		void* tmpStack[500];
-		uint32_t tmpSize = CaptureStackBackTrace(3, 500, tmpStack, (PDWORD)&hash);
+		uint32_t tmpSize = CaptureStackBackTrace(4, 500, tmpStack, (PDWORD)&hash);
 
 		for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
 			stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
