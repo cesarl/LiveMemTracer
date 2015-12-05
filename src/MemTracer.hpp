@@ -28,7 +28,7 @@ static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
 #include <string>     //memset
 #include <Windows.h>  //CaptureStackBackTrace
 
-#include <unordered_map>
+#include <vector>
 #include <algorithm>
 #include <mutex>
 #endif
@@ -71,241 +71,154 @@ namespace LiveMemTracer
 	static inline void dealloc(void *ptr);
 	static inline void deallocAligned(void *ptr);
 
+	struct Alloc;
+
 	static void treatChunk(Chunk *chunk);
-	static void updateTree(size_t index, int64_t size, bool checkTree);
+	static void updateTree(Alloc &alloc, int64_t size, bool checkTree);
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
 #ifdef LMT_IMPL
-	namespace Private
+	struct Alloc
 	{
-		struct Alloc
+		Hash hash;
+		int64_t counter;
+		const char *stackStr[STACK_SIZE_PER_ALLOC];
+		uint8_t stackSize;
+	};
+
+	template <typename Key, typename Value, size_t Capacity>
+	class Dictionary
+	{
+	public:
+		static const size_t   HASH_EMPTY = 0;
+		static const size_t   HASH_INVALID = Hash(-1);
+
+		Dictionary()
 		{
-			Hash hash;
-			int64_t counter;
-			const char *stackStr[STACK_SIZE_PER_ALLOC];
-			uint8_t stackSize;
-		};
+		}
 
-		/*
-		hash : main -> new A -> new B -> new C
-		hash : main -> new B -> new C
-		hash : main -> new B -> new C
-
-		main  7
-		new A 1 (1 x 1)
-		new B 4 (2 x 2)
-		new C 2 (2 x 1)
-		new D 2 (2 x 1)
-
-		main 9
-		    new A 5
-			    new B 4
-				    new C 1
-					new D 1
-			new B 4
-			   new C 1
-			   new D 1
-
-		[]main
-		    - new A
-			    [] new A
-			- new B 4
-			    [] new B
-				- new C 1
-				    [] new C
-				- new D 1
-				    [] new D
-	    */
-
-		class AllocTree
+		struct Pair
 		{
-		public:
-			static const Hash   HASH_EMPTY = 0;
-			static const Hash   HASH_INVALID = Hash(-1);
-			static const Hash   CAPACITY = 1024 * 64;
-
-			struct Edge
-			{
-				Hash hash = HASH_EMPTY;
-				int64_t count = 0;
-				const char *name = nullptr;
-				std::vector<Hash> to;
-			};
-
-			AllocTree()
-			{
-			}
-
-			Edge *update(int64_t size, uint8_t depth, const char *name)
-			{
-				const Hash hash = getHash(depth, name);
-				assert(hash != HASH_INVALID);
-
-				Edge *edge = &_buffer[hash];
-				if (edge->hash == HASH_EMPTY)
-				{
-					edge->name = name;
-					edge->hash = hash;
-					edge->count = size;
-					return edge;
-				}
-				edge->count += size;
-				return edge;
-			}
 		private:
-			Edge                _buffer[CAPACITY];
-			static const Hash   HASH_MODIFIER = 7;
-
-			inline Hash getHash(uint8_t depth, const char *name)
-			{
-				Hash hash = Hash(name);
-				hash += depth * depth;
-				for (size_t i = 0; i < CAPACITY; ++i)
-				{
-					const Hash realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % CAPACITY;
-					if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
-						return realHash;
-				}
-				assert(false);
-				return HASH_INVALID;
-			}
-		};
-
-		class AllocDictionary
-		{
+			Hash  hash = HASH_EMPTY;
+			Key   key;
+			Value value;
 		public:
-			static const size_t   HASH_EMPTY = 0;
-			static const size_t   HASH_INVALID = Hash(-1);
-			static const size_t   CAPACITY = 1024 * 64;
-
-			AllocDictionary()
-			{
-			}
-
-			struct Pair
-			{
-				size_t hash;
-				const char *str;
-			};
-
-			Pair *update(size_t name)
-			{
-				const size_t hash = getHash(name);
-				assert(hash != HASH_INVALID);
-
-				Pair *pair = &_buffer[hash];
-				return pair;
-			}
-		private:
-			Pair _buffer[CAPACITY];
-			static const size_t HASH_MODIFIER = 7;
-
-			inline size_t getHash(size_t name)
-			{
-				size_t hash = name;
-				for (size_t i = 0; i < CAPACITY; ++i)
-				{
-					const size_t realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % CAPACITY;
-					if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
-						return realHash;
-				}
-				assert(false);
-				return HASH_INVALID;
-			}
+			inline Value &getValue() { return value; }
+			inline Hash  &getHash() { return hash; }
+			friend class Dictionary;
 		};
 
-		__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
-		__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
-		__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
-		__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
-		__declspec(thread) static bool                      g_th_initialized = false;
-
-		static AllocDictionary                              g_hashStackRefTable;
-		static std::unordered_map<Hash, size_t>             g_allocIndexRefTable;
-		static std::vector<Alloc>                           g_allocList;
-
-		//TEST 1 - 5 seconds !
-		/*
-		struct Edge
+		Pair *update(const Key &name)
 		{
-			const char *from;
-			const char *to;
-			int32_t      counter;
-			bool operator==(const char *o) const { return from == o; }
-			bool operator<(const Edge &o) const { return from < o.from; }
-			bool operator<(const char *o) const { return from < o; }
-		};
+			const size_t hash = getHash(name);
+			assert(hash != HASH_INVALID);
 
-		typedef std::unordered_map<const char *, std::vector<Edge>> Tree;
+			Pair *pair = &_buffer[hash];
+			if (pair->hash == HASH_EMPTY)
+			{
+				pair->hash = hash;
+				pair->key = name;
+			}
+			return pair;
+		}
+	private:
+		Pair _buffer[Capacity];
+		static const size_t HASH_MODIFIER = 7;
 
-		static Tree                                         g_tree;
-		static std::mutex                                   g_mutex;
-		*/
+		inline size_t getHash(Key key)
+		{
+			size_t hash = key;
+			for (size_t i = 0; i < Capacity; ++i)
+			{
+				const size_t realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % Capacity;
+				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
+					return realHash;
+			}
+			assert(false);
+			return HASH_INVALID;
+		}
+	};
 
-		static AllocTree                                    g_tree;
-		static std::mutex                                   g_mutex;
+	struct Edge
+	{
+		int64_t count = 0;
+		const char *name = nullptr;
+		std::vector<Hash> to;
+	};
 
-		static inline Chunk *getChunck();
-		static inline bool chunkIsFull(const Chunk *chunk);
-		static inline Chunk *getNextChunk();
-		static inline uint8_t findInCache(Hash hash);
-		static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
-		static inline void logFreeInChunk(Chunk *chunk, Header *header);
-	}
-#endif
+	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
+	__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
+	__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
+	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
+	__declspec(thread) static bool                      g_th_initialized = false;
+
+	static Dictionary<size_t, const char*, 1024 * 16>   g_hashStackRefTable;
+	static Dictionary<Hash, Alloc, 1024 * 16>           g_allocIndexRefTable;
+
+	static Dictionary<size_t, Edge, 1024 * 16>          g_tree;
+	static std::mutex                                   g_mutex;
+
+	static inline Chunk *getChunck();
+	static inline bool chunkIsFull(const Chunk *chunk);
+	static inline Chunk *getNextChunk();
+	static inline uint8_t findInCache(Hash hash);
+	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
+	static inline void logFreeInChunk(Chunk *chunk, Header *header);
 }
+#endif
 
 #ifdef LMT_IMPL
 void *LiveMemTracer::alloc(size_t size)
 {
-	Chunk *chunk = Private::getChunck();
-	if (Private::chunkIsFull(chunk))
+	Chunk *chunk = getChunck();
+	if (chunkIsFull(chunk))
 	{
-		chunk = Private::getNextChunk();
+		chunk = getNextChunk();
 	}
 	void *ptr = malloc(size + HEADER_SIZE);
 	Header *header = (Header*)(ptr);
-	Private::logAllocInChunk(chunk, header, size);
+	logAllocInChunk(chunk, header, size);
 	return (void*)(size_t(ptr) + HEADER_SIZE);
 }
 
 void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
-	Chunk *chunk = Private::getChunck();
-	if (Private::chunkIsFull(chunk))
+	Chunk *chunk = getChunck();
+	if (chunkIsFull(chunk))
 	{
-		chunk = Private::getNextChunk();
+		chunk = getNextChunk();
 	}
 	void *ptr = _aligned_offset_malloc(size + HEADER_SIZE, alignment, HEADER_SIZE);
 	Header *header = (Header*)(ptr);
-	Private::logAllocInChunk(chunk, header, size);
+	logAllocInChunk(chunk, header, size);
 	return (void*)(size_t(ptr) + HEADER_SIZE);
 }
 
 void LiveMemTracer::dealloc(void *ptr)
 {
-	Chunk *chunk = Private::getChunck();
-	if (Private::chunkIsFull(chunk))
+	Chunk *chunk = getChunck();
+	if (chunkIsFull(chunk))
 	{
-		chunk = Private::getNextChunk();
+		chunk = getNextChunk();
 	}
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
-	Private::logFreeInChunk(chunk, header);
+	logFreeInChunk(chunk, header);
 	free(offset);
 }
 
 void LiveMemTracer::deallocAligned(void *ptr)
 {
-	Chunk *chunk = Private::getChunck();
-	if (Private::chunkIsFull(chunk))
+	Chunk *chunk = getChunck();
+	if (chunkIsFull(chunk))
 	{
-		chunk = Private::getNextChunk();
+		chunk = getNextChunk();
 	}
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
-	Private::logFreeInChunk(chunk, header);
+	logFreeInChunk(chunk, header);
 	_aligned_free(offset);
 }
 
@@ -336,17 +249,17 @@ namespace SymbolGetter
 	static const char *getSymbol(void *ptr)
 	{
 		init();
-		
+
 		DWORD64 dwDisplacement = 0;
 		DWORD64 dwAddress = DWORD64(ptr);
 		HANDLE hProcess = GetCurrentProcess();
-		
+
 		char pSymbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
 		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)pSymbolBuffer;
-		
+
 		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
 		pSymbol->MaxNameLen = MAX_SYM_NAME;
-		
+
 		if (!SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
 		{
 			return NULL;
@@ -355,57 +268,25 @@ namespace SymbolGetter
 	}
 };
 
-//TEST1
-
-//void LiveMemTracer::updateTree(size_t index, int32_t size)
-//{
-//	Private::Alloc &alloc = Private::g_allocList[index];
-//	int stackSize = alloc.stackSize;
-//	stackSize -= 1;
-//	while (stackSize >= 0)
-//	{
-//		auto from = Private::g_tree.find(alloc.stackStr[stackSize]);
-//		if (from == std::end(Private::g_tree))
-//		{
-//			Private::g_tree.insert(std::make_pair(alloc.stackStr[stackSize], std::vector<Private::Edge>()));
-//			from = Private::g_tree.find(alloc.stackStr[stackSize]);
-//		}
-//
-//		auto edge = std::lower_bound(std::begin(from->second), std::end(from->second), alloc.stackStr[stackSize + 1]);
-//		if (edge != std::end(from->second) && edge->from == alloc.stackStr[stackSize + 1])
-//		{
-//			edge->counter += size;
-//		}
-//		else
-//		{
-//			Private::Edge newEdge;
-//			newEdge.from = alloc.stackStr[stackSize + 1];
-//			newEdge.to = alloc.stackStr[stackSize];
-//			newEdge.counter = size;
-//			from->second.insert(std::upper_bound(std::begin(from->second), std::end(from->second), newEdge), newEdge);
-//		}
-//		--stackSize;
-//	}
-//}
-
-void LiveMemTracer::updateTree(size_t index, int64_t size, bool checkTree)
+void LiveMemTracer::updateTree(Alloc &alloc, int64_t size, bool checkTree)
 {
-	Private::Alloc &alloc = Private::g_allocList[index];
 	int stackSize = alloc.stackSize;
 	stackSize -= 2;
 	uint8_t depth = 0;
 
-	Private::AllocTree::Edge *previousEdge = nullptr;
+	Dictionary<size_t, Edge, 1024 * 16>::Pair *previousEdge = nullptr;
 	while (stackSize >= 0)
 	{
-		Private::AllocTree::Edge *current = Private::g_tree.update(size, depth, alloc.stackStr[stackSize]);
-
+		auto *current = g_tree.update(size_t(alloc.stackStr[stackSize]) + depth * depth);
+		current->getValue().count += size;
 		if (checkTree && previousEdge != nullptr)
 		{
-			if (previousEdge->to.empty()
-				|| std::lower_bound(std::begin(previousEdge->to), std::end(previousEdge->to), current->hash) == std::end(previousEdge->to))
+			current->getValue().name = alloc.stackStr[stackSize];
+			auto &prev = previousEdge->getValue();
+			if (prev.to.empty()
+				|| std::lower_bound(std::begin(prev.to), std::end(prev.to), current->getHash()) == std::end(prev.to))
 			{
-				previousEdge->to.insert(std::upper_bound(std::begin(previousEdge->to), std::end(previousEdge->to), current->hash), current->hash);
+				prev.to.insert(std::upper_bound(std::begin(prev.to), std::end(prev.to), current->getHash()), current->getHash());
 			}
 		}
 
@@ -417,37 +298,34 @@ void LiveMemTracer::updateTree(size_t index, int64_t size, bool checkTree)
 
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
-	std::lock_guard<std::mutex> lock(Private::g_mutex);
+	std::lock_guard<std::mutex> lock(g_mutex);
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
 	{
-		auto it = Private::g_allocIndexRefTable.find(chunk->allocHash[i]);
-		if (it != std::end(Private::g_allocIndexRefTable))
+		auto it = g_allocIndexRefTable.update(chunk->allocHash[i]);
+		auto &alloc = it->getValue();
+		if (alloc.stackSize != 0)
 		{
-			Private::g_allocList[it->second].counter += chunk->allocSize[i];
-			updateTree(it->second, chunk->allocSize[i], false);
+			alloc.counter += chunk->allocSize[i];
+			updateTree(alloc, chunk->allocSize[i], false);
 			continue;
 		}
-		Private::Alloc alloc;
 		alloc.counter = chunk->allocSize[i];
 		alloc.hash = chunk->allocHash[i];
 
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = (&chunk->allocStack[i])[j];
-			auto found = Private::g_hashStackRefTable.update(size_t(addr));
-			if (found->str != nullptr)
+			auto found = g_hashStackRefTable.update(size_t(addr));
+			if (found->getValue() != nullptr)
 			{
-				alloc.stackStr[j] = found->str;
+				alloc.stackStr[j] = found->getValue();
 				continue;
 			}
 			alloc.stackStr[j] = SymbolGetter::getSymbol(addr);
-			found->str = alloc.stackStr[j];
+			found->getValue() = alloc.stackStr[j];
 		}
 		alloc.stackSize = chunk->allocStackSize[i];
-		size_t index = Private::g_allocList.size();
-		Private::g_allocIndexRefTable.insert(std::make_pair(alloc.hash, index));
-		Private::g_allocList.push_back(alloc);
-		updateTree(index, chunk->allocSize[i], true);
+		updateTree(alloc, chunk->allocSize[i], true);
 	}
 
 	chunk->treated.store(ChunkStatus::TREATED);
@@ -456,7 +334,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 
 //////////////////////////////////////////////////////////////////////////
 
-LiveMemTracer::Chunk *LiveMemTracer::Private::getChunck()
+LiveMemTracer::Chunk *LiveMemTracer::getChunck()
 {
 	if (!g_th_initialized)
 	{
@@ -467,7 +345,7 @@ LiveMemTracer::Chunk *LiveMemTracer::Private::getChunck()
 	return &g_th_chunks[g_th_chunkIndex];
 }
 
-bool LiveMemTracer::Private::chunkIsFull(const LiveMemTracer::Chunk *chunk)
+bool LiveMemTracer::chunkIsFull(const LiveMemTracer::Chunk *chunk)
 {
 	if (chunk->allocIndex >= ALLOC_NUMBER_PER_CHUNK
 		|| chunk->stackIndex >= ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC)
@@ -475,10 +353,10 @@ bool LiveMemTracer::Private::chunkIsFull(const LiveMemTracer::Chunk *chunk)
 	return false;
 }
 
-LiveMemTracer::Chunk *LiveMemTracer::Private::getNextChunk()
+LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
 {
-	Chunk *currentChunk = Private::getChunck();
-	if (Private::chunkIsFull(currentChunk) == false)
+	Chunk *currentChunk = getChunck();
+	if (chunkIsFull(currentChunk) == false)
 	{
 		assert(false && "Why did you called me if current chunk is not full ?");
 	}
@@ -493,7 +371,7 @@ LiveMemTracer::Chunk *LiveMemTracer::Private::getNextChunk()
 	}
 
 	g_th_chunkIndex = (g_th_chunkIndex + 1) % CHUNK_NUMBER;
-	Chunk *chunk = Private::getChunck();
+	Chunk *chunk = getChunck();
 
 	while (chunk->treated.load() == ChunkStatus::PENDING)
 	{
@@ -512,7 +390,7 @@ LiveMemTracer::Chunk *LiveMemTracer::Private::getNextChunk()
 	return chunk;
 }
 
-uint8_t LiveMemTracer::Private::findInCache(LiveMemTracer::Hash hash)
+uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 {
 	for (uint8_t i = 0; i < CACHE_SIZE; ++i)
 	{
@@ -530,7 +408,7 @@ uint8_t LiveMemTracer::Private::findInCache(LiveMemTracer::Hash hash)
 }
 
 
-void LiveMemTracer::Private::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
+void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
 {
 	Hash hash;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
@@ -568,7 +446,7 @@ void LiveMemTracer::Private::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMe
 	header->hash = hash;
 }
 
-void LiveMemTracer::Private::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header)
+void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header)
 {
 	size_t index = chunk->allocIndex;
 	uint8_t found = findInCache(header->hash);

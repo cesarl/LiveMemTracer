@@ -127,24 +127,28 @@ void fooBar(std::vector<Foo*> &vec, size_t size)
 
 int main(int ac, char **av)
 {
-	auto start = std::chrono::high_resolution_clock::now();
-
-	std::vector<Foo*> testVector;
-
-	fooBar(testVector, 100);
-	for (size_t i = 0; i < 100; ++i)
-		fooBar(testVector, 1000);
-
-	for (size_t i = 0; i < testVector.size(); ++i)
+	for (int test = 0; test < 10; ++test)
 	{
-		delete[]testVector[i]->ptr;
-		delete  testVector[i];
+
+		auto start = std::chrono::high_resolution_clock::now();
+
+		std::vector<Foo*> testVector;
+
+		fooBar(testVector, 100);
+		for (size_t i = 0; i < 100; ++i)
+			fooBar(testVector, 1000);
+
+		for (size_t i = 0; i < testVector.size(); ++i)
+		{
+			delete[]testVector[i]->ptr;
+			delete  testVector[i];
+		}
+
+		testVector.clear();
+
+		auto end = std::chrono::high_resolution_clock::now();
+		int64_t elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+		std::cout << elapsedTime << " millis" << std::endl;
 	}
-
-	testVector.clear();
-
-	auto end = std::chrono::high_resolution_clock::now();
-	int64_t elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-	std::cout << elapsedTime << " millis" << std::endl;
 	return 0;
 }
