@@ -11,7 +11,9 @@
 #include "../Src/MemTracer.hpp"
 
 #include <vector>
+#define OVERRIDE_NEW 1
 
+#ifdef OVERRIDE_NEW
 //////////////////////////////////////////////////////////////////////////
 void* operator new(size_t count) throw(std::bad_alloc)
 {
@@ -93,6 +95,7 @@ void operator delete[](void *ptr, size_t alignment, const std::nothrow_t&) throw
 	return LiveMemTracer::deallocAligned(ptr);
 }
 //////////////////////////////////////////////////////////////////////////
+#endif
 
 struct Bar
 {
@@ -119,8 +122,13 @@ void fooBar(std::vector<Foo*> &vec, size_t size)
 	fooBar(vec, --size);
 }
 
+#include <chrono>
+#include <iostream>
+
 int main(int ac, char **av)
 {
+	auto start = std::chrono::high_resolution_clock::now();
+
 	std::vector<Foo*> testVector;
 
 	fooBar(testVector, 100);
@@ -135,5 +143,8 @@ int main(int ac, char **av)
 
 	testVector.clear();
 
+	auto end = std::chrono::high_resolution_clock::now();
+	int64_t elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	std::cout << elapsedTime << " millis" << std::endl;
 	return 0;
 }

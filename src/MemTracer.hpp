@@ -40,7 +40,7 @@ namespace LiveMemTracer
 	static const size_t CHUNK_NUMBER = LMT_CHUNK_NUMBER_PER_THREAD;
 	static const size_t CACHE_SIZE = LMT_CACHE_SIZE;
 
-	typedef uint32_t Hash;
+	typedef size_t Hash;
 
 	enum ChunkStatus
 	{
@@ -50,13 +50,13 @@ namespace LiveMemTracer
 
 	struct Chunk
 	{
-		int32_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
+		int64_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
 		Hash          allocHash[ALLOC_NUMBER_PER_CHUNK];
 		void         *allocStack[ALLOC_NUMBER_PER_CHUNK];
 		uint8_t       allocStackSize[ALLOC_NUMBER_PER_CHUNK];
 		void         *stackBuffer[ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC];
-		uint32_t      allocIndex;
-		uint32_t      stackIndex;
+		size_t        allocIndex;
+		size_t        stackIndex;
 		std::atomic<ChunkStatus> treated;
 	};
 
@@ -72,7 +72,7 @@ namespace LiveMemTracer
 	static inline void deallocAligned(void *ptr);
 
 	static void treatChunk(Chunk *chunk);
-	static void updateTree(size_t index, int32_t size);
+	static void updateTree(size_t index, int64_t size, bool checkTree);
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
@@ -82,9 +82,9 @@ namespace LiveMemTracer
 		struct Alloc
 		{
 			Hash hash;
-			int32_t counter;
+			int64_t counter;
 			const char *stackStr[STACK_SIZE_PER_ALLOC];
-			uint32_t stackSize;
+			uint8_t stackSize;
 		};
 
 		/*
@@ -118,6 +118,60 @@ namespace LiveMemTracer
 				    [] new D
 	    */
 
+		class AllocTree
+		{
+		public:
+			static const Hash   HASH_EMPTY = 0;
+			static const Hash   HASH_INVALID = Hash(-1);
+			static const Hash   CAPACITY = 1024 * 64;
+
+			struct Edge
+			{
+				Hash hash = HASH_EMPTY;
+				int64_t count = 0;
+				const char *name = nullptr;
+				std::vector<Hash> to;
+			};
+
+			AllocTree()
+			{
+			}
+
+			Edge *update(int64_t size, uint8_t depth, const char *name)
+			{
+				const Hash hash = getHash(depth, name);
+				assert(hash != HASH_INVALID);
+
+				Edge *edge = &_buffer[hash];
+				if (edge->hash == HASH_EMPTY)
+				{
+					edge->name = name;
+					edge->hash = hash;
+					edge->count = size;
+					return edge;
+				}
+				edge->count += size;
+				return edge;
+			}
+		private:
+			Edge                _buffer[CAPACITY];
+			static const Hash   HASH_MODIFIER = 7;
+
+			inline Hash getHash(uint8_t depth, const char *name)
+			{
+				Hash hash = Hash(name);
+				hash += depth * depth;
+				for (size_t i = 0; i < CAPACITY; ++i)
+				{
+					const Hash realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % CAPACITY;
+					if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
+						return realHash;
+				}
+				assert(false);
+				return HASH_INVALID;
+			}
+		};
+
 		__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
 		__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
 		__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
@@ -128,6 +182,8 @@ namespace LiveMemTracer
 		static std::unordered_map<Hash, size_t>             g_allocIndexRefTable;
 		static std::vector<Alloc>                           g_allocList;
 
+		//TEST 1 - 5 seconds !
+		/*
 		struct Edge
 		{
 			const char *from;
@@ -141,6 +197,10 @@ namespace LiveMemTracer
 		typedef std::unordered_map<const char *, std::vector<Edge>> Tree;
 
 		static Tree                                         g_tree;
+		static std::mutex                                   g_mutex;
+		*/
+
+		static AllocTree                                    g_tree;
 		static std::mutex                                   g_mutex;
 
 		static inline Chunk *getChunck();
@@ -252,48 +312,76 @@ namespace SymbolGetter
 	}
 };
 
+//TEST1
 
-void LiveMemTracer::updateTree(size_t index, int32_t size)
+//void LiveMemTracer::updateTree(size_t index, int32_t size)
+//{
+//	Private::Alloc &alloc = Private::g_allocList[index];
+//	int stackSize = alloc.stackSize;
+//	stackSize -= 1;
+//	while (stackSize >= 0)
+//	{
+//		auto from = Private::g_tree.find(alloc.stackStr[stackSize]);
+//		if (from == std::end(Private::g_tree))
+//		{
+//			Private::g_tree.insert(std::make_pair(alloc.stackStr[stackSize], std::vector<Private::Edge>()));
+//			from = Private::g_tree.find(alloc.stackStr[stackSize]);
+//		}
+//
+//		auto edge = std::lower_bound(std::begin(from->second), std::end(from->second), alloc.stackStr[stackSize + 1]);
+//		if (edge != std::end(from->second) && edge->from == alloc.stackStr[stackSize + 1])
+//		{
+//			edge->counter += size;
+//		}
+//		else
+//		{
+//			Private::Edge newEdge;
+//			newEdge.from = alloc.stackStr[stackSize + 1];
+//			newEdge.to = alloc.stackStr[stackSize];
+//			newEdge.counter = size;
+//			from->second.insert(std::upper_bound(std::begin(from->second), std::end(from->second), newEdge), newEdge);
+//		}
+//		--stackSize;
+//	}
+//}
+
+void LiveMemTracer::updateTree(size_t index, int64_t size, bool checkTree)
 {
 	Private::Alloc &alloc = Private::g_allocList[index];
 	int stackSize = alloc.stackSize;
-	stackSize -= 1;
+	stackSize -= 2;
+	uint8_t depth = 0;
+
+	Private::AllocTree::Edge *previousEdge = nullptr;
 	while (stackSize >= 0)
 	{
-		auto from = Private::g_tree.find(alloc.stackStr[stackSize]);
-		if (from == std::end(Private::g_tree))
+		Private::AllocTree::Edge *current = Private::g_tree.update(size, depth, alloc.stackStr[stackSize]);
+
+		if (checkTree && previousEdge != nullptr)
 		{
-			Private::g_tree.insert(std::make_pair(alloc.stackStr[stackSize], std::vector<Private::Edge>()));
-			from = Private::g_tree.find(alloc.stackStr[stackSize]);
+			if (previousEdge->to.empty()
+				|| std::lower_bound(std::begin(previousEdge->to), std::end(previousEdge->to), current->hash) == std::end(previousEdge->to))
+			{
+				previousEdge->to.insert(std::upper_bound(std::begin(previousEdge->to), std::end(previousEdge->to), current->hash), current->hash);
+			}
 		}
 
-		auto edge = std::lower_bound(std::begin(from->second), std::end(from->second), alloc.stackStr[stackSize + 1]);
-		if (edge != std::end(from->second) && edge->from == alloc.stackStr[stackSize + 1])
-		{
-			edge->counter += size;
-		}
-		else
-		{
-			Private::Edge newEdge;
-			newEdge.from = alloc.stackStr[stackSize + 1];
-			newEdge.to = alloc.stackStr[stackSize];
-			newEdge.counter = size;
-			from->second.insert(std::upper_bound(std::begin(from->second), std::end(from->second), newEdge), newEdge);
-		}
+		previousEdge = current;
+		++depth;
 		--stackSize;
 	}
 }
 
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
+	std::lock_guard<std::mutex> lock(Private::g_mutex);
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
 	{
-		std::lock_guard<std::mutex> lock(Private::g_mutex);
 		auto it = Private::g_allocIndexRefTable.find(chunk->allocHash[i]);
 		if (it != std::end(Private::g_allocIndexRefTable))
 		{
 			Private::g_allocList[it->second].counter += chunk->allocSize[i];
-			updateTree(it->second, chunk->allocSize[i]);
+			updateTree(it->second, chunk->allocSize[i], false);
 			continue;
 		}
 		Private::Alloc alloc;
@@ -316,7 +404,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		size_t index = Private::g_allocList.size();
 		Private::g_allocIndexRefTable.insert(std::make_pair(alloc.hash, index));
 		Private::g_allocList.push_back(alloc);
-		updateTree(index, chunk->allocSize[i]);
+		updateTree(index, chunk->allocSize[i], true);
 	}
 
 	chunk->treated.store(ChunkStatus::TREATED);
