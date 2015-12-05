@@ -71,20 +71,27 @@ namespace LiveMemTracer
 	static inline void dealloc(void *ptr);
 	static inline void deallocAligned(void *ptr);
 
-	struct Alloc;
+	struct AllocStack;
 
 	static void treatChunk(Chunk *chunk);
-	static void updateTree(Alloc &alloc, int64_t size, bool checkTree);
+	static void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
 #ifdef LMT_IMPL
-	struct Alloc
+	struct AllocStack
 	{
 		Hash hash;
 		int64_t counter;
 		const char *stackStr[STACK_SIZE_PER_ALLOC];
 		uint8_t stackSize;
+	};
+
+	struct Alloc
+	{
+		int64_t counter = 0;
+		const char *str = nullptr;
+		Alloc *next = nullptr;
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -127,12 +134,11 @@ namespace LiveMemTracer
 		Pair _buffer[Capacity];
 		static const size_t HASH_MODIFIER = 7;
 
-		inline size_t getHash(Key key)
+		inline size_t getHash(Key key) const
 		{
-			size_t hash = key;
 			for (size_t i = 0; i < Capacity; ++i)
 			{
-				const size_t realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % Capacity;
+				const size_t realHash = (key + i * HASH_MODIFIER * HASH_MODIFIER) % Capacity;
 				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
 					return realHash;
 			}
@@ -154,8 +160,10 @@ namespace LiveMemTracer
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 	__declspec(thread) static bool                      g_th_initialized = false;
 
-	static Dictionary<size_t, const char*, 1024 * 16>   g_hashStackRefTable;
-	static Dictionary<Hash, Alloc, 1024 * 16>           g_allocIndexRefTable;
+	static Dictionary<size_t, const char*, 1024 * 16>   g_stackStrRefTable;
+	static Dictionary<Hash, AllocStack, 1024 * 16>      g_allocStackRefTable;
+	static Dictionary<Hash, Alloc, 1024 * 8>            g_allocRefTable;
+	static Alloc                                       *g_allocList = nullptr;
 
 	static Dictionary<size_t, Edge, 1024 * 16>          g_tree;
 	static std::mutex                                   g_mutex;
@@ -268,20 +276,29 @@ namespace SymbolGetter
 	}
 };
 
-void LiveMemTracer::updateTree(Alloc &alloc, int64_t size, bool checkTree)
+void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkTree)
 {
-	int stackSize = alloc.stackSize;
+	int stackSize = allocStack.stackSize;
 	stackSize -= 2;
 	uint8_t depth = 0;
 
 	Dictionary<size_t, Edge, 1024 * 16>::Pair *previousEdge = nullptr;
 	while (stackSize >= 0)
 	{
-		auto *current = g_tree.update(size_t(alloc.stackStr[stackSize]) + depth * depth);
+		auto &alloc = g_allocRefTable.update(size_t(allocStack.stackStr[stackSize]))->getValue();
+		alloc.counter += size;
+		if (!alloc.str)
+		{
+			alloc.next = g_allocList;
+			g_allocList = &alloc;
+			alloc.str = allocStack.stackStr[stackSize];
+		}
+
+		auto *current = g_tree.update(size_t(allocStack.stackStr[stackSize]) + depth * depth);
 		current->getValue().count += size;
 		if (checkTree && previousEdge != nullptr)
 		{
-			current->getValue().name = alloc.stackStr[stackSize];
+			current->getValue().name = allocStack.stackStr[stackSize];
 			auto &prev = previousEdge->getValue();
 			if (prev.to.empty()
 				|| std::lower_bound(std::begin(prev.to), std::end(prev.to), current->getHash()) == std::end(prev.to))
@@ -301,31 +318,31 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	std::lock_guard<std::mutex> lock(g_mutex);
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
 	{
-		auto it = g_allocIndexRefTable.update(chunk->allocHash[i]);
-		auto &alloc = it->getValue();
-		if (alloc.stackSize != 0)
+		auto it = g_allocStackRefTable.update(chunk->allocHash[i]);
+		auto &allocStack = it->getValue();
+		if (allocStack.stackSize != 0)
 		{
-			alloc.counter += chunk->allocSize[i];
-			updateTree(alloc, chunk->allocSize[i], false);
+			allocStack.counter += chunk->allocSize[i];
+			updateTree(allocStack, chunk->allocSize[i], false);
 			continue;
 		}
-		alloc.counter = chunk->allocSize[i];
-		alloc.hash = chunk->allocHash[i];
+		allocStack.counter = chunk->allocSize[i];
+		allocStack.hash = chunk->allocHash[i];
 
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = (&chunk->allocStack[i])[j];
-			auto found = g_hashStackRefTable.update(size_t(addr));
+			auto found = g_stackStrRefTable.update(size_t(addr));
 			if (found->getValue() != nullptr)
 			{
-				alloc.stackStr[j] = found->getValue();
+				allocStack.stackStr[j] = found->getValue();
 				continue;
 			}
-			alloc.stackStr[j] = SymbolGetter::getSymbol(addr);
-			found->getValue() = alloc.stackStr[j];
+			allocStack.stackStr[j] = SymbolGetter::getSymbol(addr);
+			found->getValue() = allocStack.stackStr[j];
 		}
-		alloc.stackSize = chunk->allocStackSize[i];
-		updateTree(alloc, chunk->allocSize[i], true);
+		allocStack.stackSize = chunk->allocStackSize[i];
+		updateTree(allocStack, chunk->allocSize[i], true);
 	}
 
 	chunk->treated.store(ChunkStatus::TREATED);
