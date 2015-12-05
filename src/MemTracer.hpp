@@ -172,13 +172,56 @@ namespace LiveMemTracer
 			}
 		};
 
+		class AllocDictionary
+		{
+		public:
+			static const size_t   HASH_EMPTY = 0;
+			static const size_t   HASH_INVALID = Hash(-1);
+			static const size_t   CAPACITY = 1024 * 64;
+
+			AllocDictionary()
+			{
+			}
+
+			struct Pair
+			{
+				size_t hash;
+				const char *str;
+			};
+
+			Pair *update(size_t name)
+			{
+				const size_t hash = getHash(name);
+				assert(hash != HASH_INVALID);
+
+				Pair *pair = &_buffer[hash];
+				return pair;
+			}
+		private:
+			Pair _buffer[CAPACITY];
+			static const size_t HASH_MODIFIER = 7;
+
+			inline size_t getHash(size_t name)
+			{
+				size_t hash = name;
+				for (size_t i = 0; i < CAPACITY; ++i)
+				{
+					const size_t realHash = (hash + i * HASH_MODIFIER * HASH_MODIFIER) % CAPACITY;
+					if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
+						return realHash;
+				}
+				assert(false);
+				return HASH_INVALID;
+			}
+		};
+
 		__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
 		__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
 		__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
 		__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 		__declspec(thread) static bool                      g_th_initialized = false;
 
-		static std::unordered_map<void*, const char *>      g_hashStackRefTable;
+		static AllocDictionary                              g_hashStackRefTable;
 		static std::unordered_map<Hash, size_t>             g_allocIndexRefTable;
 		static std::vector<Alloc>                           g_allocList;
 
@@ -391,14 +434,14 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = (&chunk->allocStack[i])[j];
-			auto found = Private::g_hashStackRefTable.find(addr);
-			if (found != std::end(Private::g_hashStackRefTable))
+			auto found = Private::g_hashStackRefTable.update(size_t(addr));
+			if (found->str != nullptr)
 			{
-				alloc.stackStr[j] = found->second;
+				alloc.stackStr[j] = found->str;
 				continue;
 			}
 			alloc.stackStr[j] = SymbolGetter::getSymbol(addr);
-			Private::g_hashStackRefTable.insert(std::make_pair(addr, alloc.stackStr[j]));
+			found->str = alloc.stackStr[j];
 		}
 		alloc.stackSize = chunk->allocStackSize[i];
 		size_t index = Private::g_allocList.size();
