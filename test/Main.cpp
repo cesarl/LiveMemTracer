@@ -1,4 +1,4 @@
-#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 16
+#define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 16
 #define LMT_CACHE_SIZE 16
@@ -119,19 +119,33 @@ struct Foo
 	size_t       index;
 	std::string  indexStr;
 	Bar*         ptr;
+	Foo*         next = nullptr;
 };
 
-void fooBar(std::vector<Foo*> &vec, size_t size)
+template <size_t size>
+struct FooBarFunctor
 {
-	if (size == 0)
-		return;
-	Foo *tmpFoo = new Foo;
-	tmpFoo->index = size;
-	tmpFoo->indexStr = std::to_string(size);
-	tmpFoo->ptr = new Bar[size]();
-	vec.push_back(tmpFoo);
-	fooBar(vec, --size);
-}
+	static void call(Foo *prev)
+	{
+		if (size == 0)
+			return;
+		Foo *tmpFoo = new Foo;
+		tmpFoo->index = size;
+		tmpFoo->indexStr = std::to_string(size);
+		tmpFoo->ptr = new Bar[size]();
+		for (int i = 0; i < size; ++i)
+			tmpFoo->indexStr += "|coucou|";
+		prev->next = tmpFoo;
+		FooBarFunctor<(size > 0 ? size - 1 : 0)>::call(tmpFoo);
+	}
+};
+
+
+struct Toto
+{
+	char toto[128];
+	Toto(){}
+};
 
 #include <chrono>
 #include <iostream>
@@ -156,6 +170,8 @@ int main(int ac, char **av)
 
 	// Main loop
 	float dt = 0.0f;
+	std::vector<Toto*> totoVector;
+	int clearCounter = 0;
 	while (!glfwWindowShouldClose(window))
 	{
 		auto start = std::chrono::high_resolution_clock::now();
@@ -170,24 +186,39 @@ int main(int ac, char **av)
 		glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		std::vector<Foo*> testVector;
+		Foo foo;
+		FooBarFunctor<1>::call(&foo);
 
-		fooBar(testVector, 10);
-		for (size_t i = 0; i < 10; ++i)
-			fooBar(testVector, 100);
+		FooBarFunctor<200>::call(foo.next);
 
-		for (size_t i = 0; i < testVector.size(); ++i)
+		Foo *p = foo.next;
+		while (p != nullptr)
 		{
-			delete[]testVector[i]->ptr;
-			delete  testVector[i];
+			auto *next = p->next;
+			delete[]p->ptr;
+			delete  p;
+			p = next;
 		}
 
-		testVector.clear();
+		for (int i = 0; i < 100; ++i)
+		{
+			totoVector.push_back(new Toto());
+		}
+		if (++clearCounter == 100)
+		{
+			for (auto &e : totoVector)
+			{
+				delete e;
+			}
+			totoVector.clear();
+			clearCounter = 0;
+		}
 
 		LiveMemTracer::display(dt);
 
 		ImGui::Render();
 		glfwSwapBuffers(window);
+
 
 		auto end = std::chrono::high_resolution_clock::now();
 		int64_t elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
