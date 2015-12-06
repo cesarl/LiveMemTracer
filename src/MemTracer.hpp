@@ -159,7 +159,6 @@ namespace LiveMemTracer
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 	__declspec(thread) static bool                      g_th_initialized = false;
 
-	static Dictionary<size_t, const char*, 1024 * 16>   g_stackStrRefTable;
 	static Dictionary<Hash, AllocStack, 1024 * 16>      g_allocStackRefTable;
 	static Dictionary<Hash, Alloc, 1024 * 8>            g_allocRefTable;
 	static Alloc                                       *g_allocList = nullptr;
@@ -286,15 +285,6 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
-		auto &alloc = g_allocRefTable.update(size_t(allocStack.stackStr[stackSize]))->getValue();
-		alloc.counter += size;
-		if (!alloc.str)
-		{
-			alloc.next = g_allocList;
-			g_allocList = &alloc;
-			alloc.str = allocStack.stackStr[stackSize];
-		}
-
 		Hash currentHash = size_t(allocStack.stackStr[stackSize]) + depth * depth;
 		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
 		currentPtr->count += size;
@@ -340,14 +330,18 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
-			auto found = g_stackStrRefTable.update(size_t(addr));
-			if (found->getValue() != nullptr)
+			auto found = g_allocRefTable.update(size_t(addr));
+			if (found->getValue().str != nullptr)
 			{
-				allocStack.stackStr[j] = found->getValue();
+				allocStack.stackStr[j] = found->getValue().str;
+				found->getValue().counter += chunk->allocSize[i];
 				continue;
 			}
 			allocStack.stackStr[j] = SymbolGetter::getSymbol(addr);
-			found->getValue() = allocStack.stackStr[j];
+			found->getValue().str = allocStack.stackStr[j];
+			found->getValue().counter = chunk->allocSize[i];
+			found->getValue().next = g_allocList;
+			g_allocList = &found->getValue();
 		}
 		allocStack.stackSize = chunk->allocStackSize[i];
 		updateTree(allocStack, chunk->allocSize[i], true);
