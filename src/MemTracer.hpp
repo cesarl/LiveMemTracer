@@ -52,7 +52,7 @@ namespace LiveMemTracer
 	{
 		int64_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
 		Hash          allocHash[ALLOC_NUMBER_PER_CHUNK];
-		void         *allocStack[ALLOC_NUMBER_PER_CHUNK];
+		size_t        allocStackIndex[ALLOC_NUMBER_PER_CHUNK];
 		uint8_t       allocStackSize[ALLOC_NUMBER_PER_CHUNK];
 		void         *stackBuffer[ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC];
 		size_t        allocIndex;
@@ -113,20 +113,19 @@ namespace LiveMemTracer
 			Value value;
 		public:
 			inline Value &getValue() { return value; }
-			inline Hash  &getHash() { return hash; }
 			friend class Dictionary;
 		};
 
-		Pair *update(const Key &name)
+		Pair *update(const Key &key)
 		{
-			const size_t hash = getHash(name);
+			const size_t hash = getHash(key);
 			assert(hash != HASH_INVALID);
 
 			Pair *pair = &_buffer[hash];
 			if (pair->hash == HASH_EMPTY)
 			{
 				pair->hash = hash;
-				pair->key = name;
+				pair->key = key;
 			}
 			return pair;
 		}
@@ -139,7 +138,7 @@ namespace LiveMemTracer
 			for (size_t i = 0; i < Capacity; ++i)
 			{
 				const size_t realHash = (key + i * HASH_MODIFIER * HASH_MODIFIER) % Capacity;
-				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].hash == realHash)
+				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
 					return realHash;
 			}
 			assert(false);
@@ -151,7 +150,7 @@ namespace LiveMemTracer
 	{
 		int64_t count = 0;
 		const char *name = nullptr;
-		std::vector<Hash> to;
+		std::vector<Edge*> to;
 	};
 
 	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
@@ -164,6 +163,7 @@ namespace LiveMemTracer
 	static Dictionary<Hash, AllocStack, 1024 * 16>      g_allocStackRefTable;
 	static Dictionary<Hash, Alloc, 1024 * 8>            g_allocRefTable;
 	static Alloc                                       *g_allocList = nullptr;
+	static std::vector<Edge*>                           g_allocStackRoots;
 
 	static Dictionary<size_t, Edge, 1024 * 16>          g_tree;
 	static std::mutex                                   g_mutex;
@@ -257,6 +257,7 @@ namespace SymbolGetter
 	static const char *getSymbol(void *ptr)
 	{
 		init();
+		static const char *truncated = "Truncated\0";
 
 		DWORD64 dwDisplacement = 0;
 		DWORD64 dwAddress = DWORD64(ptr);
@@ -268,9 +269,9 @@ namespace SymbolGetter
 		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
 		pSymbol->MaxNameLen = MAX_SYM_NAME;
 
-		if (!SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
+		if (size_t(ptr) == size_t(-1) || !SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
 		{
-			return NULL;
+			return truncated;
 		}
 		return _strdup(pSymbol->Name);
 	}
@@ -282,7 +283,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 	stackSize -= 2;
 	uint8_t depth = 0;
 
-	Dictionary<size_t, Edge, 1024 * 16>::Pair *previousEdge = nullptr;
+	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
 		auto &alloc = g_allocRefTable.update(size_t(allocStack.stackStr[stackSize]))->getValue();
@@ -294,20 +295,27 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 			alloc.str = allocStack.stackStr[stackSize];
 		}
 
-		auto *current = g_tree.update(size_t(allocStack.stackStr[stackSize]) + depth * depth);
-		current->getValue().count += size;
-		if (checkTree && previousEdge != nullptr)
+		Hash currentHash = size_t(allocStack.stackStr[stackSize]) + depth * depth;
+		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
+		currentPtr->count += size;
+		if (checkTree)
 		{
-			current->getValue().name = allocStack.stackStr[stackSize];
-			auto &prev = previousEdge->getValue();
-			if (prev.to.empty()
-				|| std::lower_bound(std::begin(prev.to), std::end(prev.to), current->getHash()) == std::end(prev.to))
+			if (previousPtr != nullptr)
 			{
-				prev.to.insert(std::upper_bound(std::begin(prev.to), std::end(prev.to), current->getHash()), current->getHash());
+				currentPtr->name = allocStack.stackStr[stackSize];
+				if (previousPtr->to.empty()
+					|| std::lower_bound(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr) == std::end(previousPtr->to))
+				{
+					previousPtr->to.insert(std::upper_bound(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr), currentPtr);
+				}
+			}
+			else
+			{
+				g_allocStackRoots.push_back(currentPtr);
 			}
 		}
 
-		previousEdge = current;
+		previousPtr = currentPtr;
 		++depth;
 		--stackSize;
 	}
@@ -331,7 +339,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
-			void *addr = (&chunk->allocStack[i])[j];
+			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
 			auto found = g_stackStrRefTable.update(size_t(addr));
 			if (found->getValue() != nullptr)
 			{
@@ -450,7 +458,7 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::
 		return;
 	}
 
-	chunk->allocStack[index] = chunk->stackBuffer[chunk->stackIndex];
+	chunk->allocStackIndex[index] = chunk->stackIndex;// chunk->stackBuffer[chunk->stackIndex];
 	chunk->allocSize[index] = size;
 	chunk->allocHash[index] = hash;
 	chunk->allocStackSize[index] = count - 3;
@@ -476,7 +484,7 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 
 	g_th_cache[g_th_cacheIndex] = header->hash;
 	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
-	chunk->allocStack[index] = nullptr;
+	chunk->allocStackIndex[index] = -1;
 	chunk->allocSize[index] = -header->size;
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = 0;
