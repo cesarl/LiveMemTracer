@@ -301,19 +301,17 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 			currentPtr->name = allocStack.stackAllocs[stackSize]->str;
 			if (previousPtr != nullptr)
 			{
-				auto it = std::lower_bound(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
-				if (it == std::end(previousPtr->to)
-					|| *it != currentPtr)
+				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
+				if (it == std::end(previousPtr->to))
 				{
-					auto debugSizeToDelete = previousPtr->to.size();
 					previousPtr->to.insert(std::lower_bound(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr), currentPtr);
 				}
 			}
 			else
 			{
-				auto it = std::lower_bound(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr);
-				if (it == std::end(g_allocStackRoots) || *it != currentPtr)
-					g_allocStackRoots.insert(std::lower_bound(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr), currentPtr);
+				auto it = find(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr);
+				if (it == std::end(g_allocStackRoots))
+					g_allocStackRoots.push_back(currentPtr);
 			}
 		}
 		previousPtr = currentPtr;
@@ -327,9 +325,11 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	std::lock_guard<std::mutex> lock(g_mutex);
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
 	{
+		auto size = chunk->allocSize[i];
+		if (size == 0)
+			continue;
 		auto it = g_allocStackRefTable.update(chunk->allocHash[i]);
 		auto &allocStack = it->getValue();
-		auto size = chunk->allocSize[i];
 		if (allocStack.stackSize != 0)
 		{
 			allocStack.counter += size;
@@ -532,23 +532,36 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 #ifdef LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
-void recursiveImguiTreeDisplay(const LiveMemTracer::Edge *edge)
+struct EdgeSortFunction {
+	bool operator() (LiveMemTracer::Edge *a, LiveMemTracer::Edge *b) { return (a->count > b->count); }
+} edgeSortFunction;
+
+void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData, bool filter)
 {
-	ImGui::Text("%06i Ko", edge->count / 1024);
-	ImGui::SameLine();
-	if (ImGui::TreeNode(edge->name))
+	if (filter == false || edge->count)
 	{
-		for (size_t i = 0; i < edge->to.size(); ++i)
+		if (edge->count > 1024)
+			ImGui::Text("%06i K", edge->count / 1024);
+		else
+			ImGui::Text("%06i b", edge->count);
+		ImGui::SameLine();
+		if (ImGui::TreeNode(edge->name))
 		{
-			recursiveImguiTreeDisplay(edge->to[i]);
+			if (updateData)
+				std::sort(std::begin(edge->to), std::end(edge->to), edgeSortFunction);
+			for (size_t i = 0; i < edge->to.size(); ++i)
+			{
+				recursiveImguiTreeDisplay(edge->to[i], updateData, filter);
+			}
+			ImGui::TreePop();
 		}
-		ImGui::TreePop();
 	}
 }
 
 void LiveMemTracer::display(float dt)
 {
 	static bool displayTree = false;
+	static bool filterEmptyAlloc = true;
 	static float updateRatio = 0.f;
 
 	bool updateData = false;
@@ -561,7 +574,8 @@ void LiveMemTracer::display(float dt)
 
 	if (ImGui::Begin("LiveMemoryProfiler"))
 	{
-		ImGui::Checkbox("DisplayTree", &displayTree);
+		ImGui::Checkbox("DisplayTree", &displayTree); ImGui::SameLine();
+		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc);
 		ImGui::Separator();
 		if (displayTree == false)
 		{
@@ -579,9 +593,11 @@ void LiveMemTracer::display(float dt)
 		else
 		{
 			std::lock_guard<std::mutex> lock(g_mutex);
+			if (updateData)
+				std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
 			for (auto &e : g_allocStackRoots)
 			{
-				recursiveImguiTreeDisplay(e);
+				recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
 			}
 		}
 	}
