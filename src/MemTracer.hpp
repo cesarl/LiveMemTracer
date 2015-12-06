@@ -173,10 +173,14 @@ namespace LiveMemTracer
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
-}
-#endif
 
-#ifdef LMT_IMPL
+#ifndef LMT_IMGUI
+	static inline void display(float dt) {}
+#else
+	static inline void display(float dt);
+#endif
+}
+
 void *LiveMemTracer::alloc(size_t size)
 {
 	Chunk *chunk = getChunck();
@@ -484,6 +488,13 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
 }
+
+#ifdef LMT_IMGUI
+#include LMT_IMGUI_INCLUDE_PATH
+void LiveMemTracer::display(float dt)
+{
+}
+#endif
 
 //#include <iostream>
 //#include <fstream>

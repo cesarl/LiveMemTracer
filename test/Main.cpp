@@ -7,11 +7,22 @@
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk);
 
 #define LMT_IMPL 1
+#define LMT_IMGUI 1
+#define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
 
 #include "../Src/MemTracer.hpp"
 
 #include <vector>
 #define OVERRIDE_NEW 1
+
+#include "External/GL/gl3w.h"
+#include "External/GLFW/glfw3.h"
+#include "External/imgui/imgui_impl_glfw_gl3.h"
+
+static void error_callback(int error, const char* description)
+{
+	fprintf(stderr, "Error %d: %s\n", error, description);
+}
 
 #ifdef OVERRIDE_NEW
 //////////////////////////////////////////////////////////////////////////
@@ -127,16 +138,43 @@ void fooBar(std::vector<Foo*> &vec, size_t size)
 
 int main(int ac, char **av)
 {
-	for (int test = 0; test < 10; ++test)
-	{
+	// Setup window
+	glfwSetErrorCallback(error_callback);
+	if (!glfwInit())
+		exit(1);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+	GLFWwindow* window = glfwCreateWindow(1280, 720, "ImGui OpenGL3 example", NULL, NULL);
+	glfwMakeContextCurrent(window);
+	gl3wInit();
 
+	// Setup ImGui binding
+	ImGui_ImplGlfwGL3_Init(window, true);
+
+	ImVec4 clear_color = ImColor(114, 144, 154);
+
+	// Main loop
+	float dt = 0.0f;
+	while (!glfwWindowShouldClose(window))
+	{
 		auto start = std::chrono::high_resolution_clock::now();
+
+		glfwPollEvents();
+		ImGui_ImplGlfwGL3_NewFrame();
+
+		// Rendering
+		int display_w, display_h;
+		glfwGetFramebufferSize(window, &display_w, &display_h);
+		glViewport(0, 0, display_w, display_h);
+		glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
+		glClear(GL_COLOR_BUFFER_BIT);
 
 		std::vector<Foo*> testVector;
 
-		fooBar(testVector, 100);
-		for (size_t i = 0; i < 100; ++i)
-			fooBar(testVector, 1000);
+		fooBar(testVector, 10);
+		for (size_t i = 0; i < 10; ++i)
+			fooBar(testVector, 100);
 
 		for (size_t i = 0; i < testVector.size(); ++i)
 		{
@@ -146,9 +184,18 @@ int main(int ac, char **av)
 
 		testVector.clear();
 
+		LiveMemTracer::display(dt);
+
+		ImGui::Render();
+		glfwSwapBuffers(window);
+
 		auto end = std::chrono::high_resolution_clock::now();
 		int64_t elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-		std::cout << elapsedTime << " millis" << std::endl;
+		dt = float(elapsedTime) / 1000.f;
 	}
+
+	ImGui_ImplGlfwGL3_Shutdown();
+	glfwTerminate();
+
 	return 0;
 }
