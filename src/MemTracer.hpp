@@ -10,32 +10,34 @@
 #include <mutex>
 #endif
 
-#ifndef LMT_ALLOC
-#define LMT_ALLOC(size) malloc(size)
-#endif
+#ifndef LMT_ENABLED
+#define LMT_ALLOC(size)malloc(size)
+#define LMT_ALLOC_ALIGNED(size, alignment)malloc(size)
+#define LMT_DEALLOC(ptr)free(ptr)
+#define LMT_DEALLOC_ALIGNED(ptr, alignment)free(ptr)
+#define LMT_REALLOC(ptr, size)realloc(ptr, size)
+#define LMT_DISPLAY(dt)do{}while(0)
+#define LMT_EXIT()do{}while(0)
 
-#ifndef LMT_ALLOC_ALIGNED
-#define LMT_ALLOC_ALIGNED(size, alignment) malloc(size)
-#endif
+#else // LMT_ENABLED
 
-#ifndef LMT_DEALLOC
-#define LMT_DEALLOC(ptr) free(ptr)
-#endif
-
-#ifndef LMT_DEALLOC_ALIGNED
-#define LMT_DEALLOC_ALIGNED(ptr, alignment) free(ptr)
-#endif
-
-#ifndef LMT_REALLOC
-#define LMT_REALLOC(ptr, size) realloc(ptr, size)
-#endif
-
-#ifndef LMT_DISPLAY
+#define LMT_ALLOC(size)LiveMemTracer::alloc(size)
+#define LMT_ALLOC_ALIGNED(size, alignment)LiveMemTracer::allocAligned(size, alignment)
+#define LMT_DEALLOC(ptr)LiveMemTracer::dealloc(ptr)
+#define LMT_DEALLOC_ALIGNED(ptr, alignment)LiveMemTracer::deallocAligned(ptr)
+#define LMT_REALLOC(ptr, size)LiveMemTracer::realloc(ptr, size)
 #define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
-#endif
+#define LMT_EXIT() LiveMemTracer::exit()
 
 namespace LiveMemTracer
 {
+
+	inline void *alloc(size_t size);
+	inline void *allocAligned(size_t size, size_t alignment);
+	inline void dealloc(void *ptr);
+	inline void deallocAligned(void *ptr);
+	inline void *realloc(void *ptr, size_t size);
+	void exit();
 	void display(float dt);
 
 #ifdef LMT_IMPL
@@ -76,40 +78,14 @@ namespace LiveMemTracer
 #define LMT_ASSERT(condition, message) assert(condition)
 #endif
 
-	inline void *alloc(size_t size);
-	inline void *allocAligned(size_t size, size_t alignment);
-	inline void dealloc(void *ptr);
-	inline void deallocAligned(void *ptr);
-	inline void *realloc(void *ptr, size_t size);
-
-#ifdef LMT_ALLOC
-#undef LMT_ALLOC
-#define LMT_ALLOC(size)LiveMemTracer::alloc(size)
-#endif
-
-#ifdef LMT_ALLOC_ALIGNED
-#undef LMT_ALLOC_ALIGNED
-#define LMT_ALLOC_ALIGNED(size, alignment)LiveMemTracer::allocAligned(size, alignment)
-#endif
-
-
-#ifdef LMT_DEALLOC
-#undef LMT_DEALLOC
-#define LMT_DEALLOC(ptr)LiveMemTracer::dealloc(ptr)
-#endif
-
-#ifdef LMT_DEALLOC_ALIGNED
-#undef LMT_DEALLOC_ALIGNED
-#define LMT_DEALLOC_ALIGNED(ptr, alignment)LiveMemTracer::deallocAligned(ptr)
-#endif
-
-#ifdef LMT_REALLOC
-#undef LMT_REALLOC
-#define LMT_REALLOC(ptr, size)LiveMemTracer::realloc(ptr, size)
-#endif
-
 #ifndef LMT_TREAT_CHUNK
 	static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
+#endif
+
+#ifndef LMT_IMPLEMENTED
+#define LMT_IMPLEMENTED 1
+#else
+	static_assert(false, "LMT is already implemented, do not define LMT_IMPLEMENTED more than once.");
 #endif
 
 	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
@@ -217,7 +193,7 @@ namespace LiveMemTracer
 		{
 			for (size_t i = 0; i < Capacity; ++i)
 			{
-				const size_t realHash = (key + i * HASH_MODIFIER * HASH_MODIFIER) % Capacity;
+				const size_t realHash = (key * HASH_MODIFIER + i) % Capacity;
 				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
 					return realHash;
 			}
@@ -243,6 +219,7 @@ namespace LiveMemTracer
 	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
 	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
 	static Alloc                                               *g_allocList = nullptr;
+	static bool                                                 g_isRunning = true;
 
 	static Dictionary<size_t, Edge, TREE_DICTIONARY_SIZE>       g_tree;
 
@@ -373,6 +350,12 @@ void LiveMemTracer::deallocAligned(void *ptr)
 	logFreeInChunk(chunk, header);
 	_aligned_free(offset);
 }
+
+void LiveMemTracer::exit()
+{
+	g_isRunning = false;
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -590,7 +573,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
 	{
 		// That's a recursive call, so we go to the next chunk
 	}
-	else
+	else if (g_isRunning)
 	{
 		currentChunk->treated.store(ChunkStatus::PENDING);
 		LMT_TREAT_CHUNK(currentChunk);
@@ -714,7 +697,6 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 		{
 			ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
 		}
-
 		ImGui::SameLine();
 		if (ImGui::TreeNode((void*)edge, edge->name))
 		{
@@ -731,7 +713,6 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 
 void LiveMemTracer::display(float dt)
 {
-	static bool displayTree = true;
 	static bool filterEmptyAlloc = true;
 	static float updateRatio = 0.f;
 
@@ -745,33 +726,26 @@ void LiveMemTracer::display(float dt)
 
 	if (ImGui::Begin("LiveMemoryProfiler"))
 	{
-		ImGui::Checkbox("DisplayTree", &displayTree); ImGui::SameLine();
 		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc); ImGui::SameLine();
 		ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 		ImGui::Separator();
-		if (displayTree == false)
+
+		std::lock_guard<std::mutex> lock(g_mutex);
+		if (updateData)
+			std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
+		Alloc *allocList = g_allocList;
+		ImGui::Columns(2);
+		ImGui::Text("Size");
+		ImGui::NextColumn();
+		ImGui::Text("Stack");
+		ImGui::NextColumn();
+		ImGui::Separator();
+		ImGui::Columns(1);
+		for (auto &e : g_allocStackRoots)
 		{
-			std::lock_guard<std::mutex> lock(g_mutex);
-			Alloc *allocList = g_allocList;
-			while (allocList != nullptr)
-			{
-				ImGui::Columns(2);
-				ImGui::Text("%i Ko", allocList->counter / 1024);
-				ImGui::NextColumn();
-				ImGui::Text("%s", allocList->str);
-				allocList = allocList->next;
-			}
+			recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
 		}
-		else
-		{
-			std::lock_guard<std::mutex> lock(g_mutex);
-			if (updateData)
-				std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
-			for (auto &e : g_allocStackRoots)
-			{
-				recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
-			}
-		}
+
 	}
 	ImGui::End();
 }
@@ -779,4 +753,5 @@ void LiveMemTracer::display(float dt)
 void LiveMemTracer::display(float dt) {}
 #endif
 
-#endif
+#endif // LMT_IMPL
+#endif // LMT_ENABLED

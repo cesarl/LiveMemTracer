@@ -1,3 +1,4 @@
+//#define LMT_ENABLED 1
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 16
@@ -14,6 +15,7 @@
 #include <vector>
 #define OVERRIDE_NEW 1
 
+#include LMT_IMGUI_INCLUDE_PATH
 #include "External/GL/gl3w.h"
 #include "External/GLFW/glfw3.h"
 #include "External/imgui/imgui_impl_glfw_gl3.h"
@@ -29,82 +31,82 @@ static void error_callback(int error, const char* description)
 //////////////////////////////////////////////////////////////////////////
 void* operator new(size_t count) throw(std::bad_alloc)
 {
-	return LiveMemTracer::alloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new(size_t count, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::alloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new(size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return LiveMemTracer::allocAligned(count, alignment);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new(size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::allocAligned(count, alignment);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new[](size_t count) throw(std::bad_alloc)
 {
-	return LiveMemTracer::alloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new[](size_t count, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::alloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new[](size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return LiveMemTracer::allocAligned(count, alignment);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new[](size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::allocAligned(count, alignment);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void operator delete(void* ptr) throw()
 {
-	return LiveMemTracer::dealloc(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete(void *ptr, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::dealloc(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment) throw()
 {
-	return LiveMemTracer::deallocAligned(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::deallocAligned(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete[](void* ptr) throw()
 {
-	return LiveMemTracer::dealloc(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete[](void *ptr, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::dealloc(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment) throw()
 {
-	return LiveMemTracer::deallocAligned(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LiveMemTracer::deallocAligned(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 //////////////////////////////////////////////////////////////////////////
 #endif
@@ -234,7 +236,7 @@ int main(int ac, char **av)
 			clearCounter = 0;
 		}
 
-		LiveMemTracer::display(dt);
+		LMT_DISPLAY(dt);
 
 		ImGui::Render();
 		glfwSwapBuffers(window);
@@ -247,6 +249,6 @@ int main(int ac, char **av)
 
 	ImGui_ImplGlfwGL3_Shutdown();
 	glfwTerminate();
-
+	LMT_EXIT();
 	return 0;
 }
