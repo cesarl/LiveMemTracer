@@ -2,7 +2,6 @@
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 16
 #define LMT_CACHE_SIZE 16
-//#define LMT_WAIT_IF_FULL 1
 
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk);
 
@@ -119,7 +118,10 @@ struct Foo
 	size_t       index;
 	std::string  indexStr;
 	Bar*         ptr;
-	Foo*         next = nullptr;
+	Foo*         next;
+	Foo() :
+		next(nullptr)
+	{}
 };
 
 template <size_t size>

@@ -1,5 +1,41 @@
 #pragma once
 
+//#ifndef LMT_MALLOC
+//#define LMT_MALLOC(s) malloc(s)
+//#endif
+//
+//#ifndef LMT_MALLOC_ALIGNED
+//#define LMT_MALLOC_ALIGNED(s) malloc(s)
+//#endif
+
+#include <cstdint>    //uint32_t etc...
+
+#ifdef LMT_IMPL
+#include <atomic>     //std::atomic
+#include <cstdlib>    //malloc etc...
+#include <string>     //memset
+#include <Windows.h>  //CaptureStackBackTrace
+
+#include <vector>
+#include <algorithm>
+#include <mutex>
+#endif
+
+namespace LiveMemTracer
+{
+	static inline void *alloc(size_t size);
+	static inline void *allocAligned(size_t size, size_t alignment);
+	static inline void dealloc(void *ptr);
+	static inline void deallocAligned(void *ptr);
+	static inline void display(float dt)
+#ifndef LMT_IMPL
+	{}
+#else
+		;
+#endif
+
+#ifdef LMT_IMPL
+
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 16
 #endif
@@ -21,24 +57,9 @@
 #endif
 
 #ifndef LMT_TREAT_CHUNK
-static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
+	static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
 #endif
 
-#include <cstdint>    //uint32_t etc...
-#include <atomic>     //std::atomic
-
-#ifdef LMT_IMPL
-#include <cstdlib>    //malloc etc...
-#include <string>     //memset
-#include <Windows.h>  //CaptureStackBackTrace
-
-#include <vector>
-#include <algorithm>
-#include <mutex>
-#endif
-
-namespace LiveMemTracer
-{
 	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
 	static const size_t STACK_SIZE_PER_ALLOC = LMT_STACK_SIZE_PER_ALLOC;
 	static const size_t CHUNK_NUMBER = LMT_CHUNK_NUMBER_PER_THREAD;
@@ -70,11 +91,6 @@ namespace LiveMemTracer
 		size_t  size;
 	};
 
-	static inline void *alloc(size_t size);
-	static inline void *allocAligned(size_t size, size_t alignment);
-	static inline void dealloc(void *ptr);
-	static inline void deallocAligned(void *ptr);
-
 	struct AllocStack;
 
 	static void treatChunk(Chunk *chunk);
@@ -82,21 +98,22 @@ namespace LiveMemTracer
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
-#ifdef LMT_IMPL
 	struct Alloc
 	{
-		int64_t counter = 0;
-		const char *str = nullptr;
-		Alloc *next = nullptr;
-		Alloc *shared = nullptr;
+		int64_t counter;
+		const char *str;
+		Alloc *next;
+		Alloc *shared;
+		Alloc() : counter(0), str(nullptr), next(nullptr), shared(nullptr) {}
 	};
 
 	struct AllocStack
 	{
-		Hash hash = 0;
-		int64_t counter = 0;
+		Hash hash;
+		int64_t counter;
 		Alloc *stackAllocs[STACK_SIZE_PER_ALLOC];
-		uint8_t stackSize = 0;
+		uint8_t stackSize;
+		AllocStack() : hash(0), counter(0), stackSize(0) {}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -113,9 +130,10 @@ namespace LiveMemTracer
 		struct Pair
 		{
 		private:
-			Hash  hash = HASH_EMPTY;
+			Hash  hash;
 			Key   key;
 			Value value;
+			Pair() : hash(HASH_EMPTY) {}
 		public:
 			inline Value &getValue() { return value; }
 			friend class Dictionary;
@@ -153,9 +171,10 @@ namespace LiveMemTracer
 
 	struct Edge
 	{
-		int64_t count = 0;
-		const char *name = nullptr;
+		int64_t count;
+		const char *name;
 		std::vector<Edge*> to;
+		Edge() : count(0), name(nullptr) {}
 	};
 
 	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
@@ -178,14 +197,10 @@ namespace LiveMemTracer
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
-
-#ifndef LMT_IMGUI
-	static inline void display(float dt) {}
-#else
-	static inline void display(float dt);
 #endif
 }
 
+#ifdef LMT_IMPL
 void *LiveMemTracer::alloc(size_t size)
 {
 	Chunk *chunk = getChunk();
@@ -607,6 +622,8 @@ void LiveMemTracer::display(float dt)
 	}
 	ImGui::End();
 }
+#else
+void LiveMemTracer::display(float dt) {}
 #endif
 
 #endif
