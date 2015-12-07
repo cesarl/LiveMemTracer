@@ -26,6 +26,10 @@
 #define LMT_DEALLOC_ALIGNED(ptr, alignment) free(ptr)
 #endif
 
+#ifndef LMT_REALLOC
+#define LMT_REALLOC(ptr, size) realloc(ptr, size)
+#endif
+
 #ifndef LMT_DISPLAY
 #define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
 #endif
@@ -76,6 +80,7 @@ namespace LiveMemTracer
 	inline void *allocAligned(size_t size, size_t alignment);
 	inline void dealloc(void *ptr);
 	inline void deallocAligned(void *ptr);
+	inline void *realloc(void *ptr, size_t size);
 
 #ifdef LMT_ALLOC
 #undef LMT_ALLOC
@@ -96,6 +101,11 @@ namespace LiveMemTracer
 #ifdef LMT_DEALLOC_ALIGNED
 #undef LMT_DEALLOC_ALIGNED
 #define LMT_DEALLOC_ALIGNED(ptr, alignment)LiveMemTracer::deallocAligned(ptr)
+#endif
+
+#ifdef LMT_REALLOC
+#undef LMT_REALLOC
+#define LMT_REALLOC(ptr, size)LiveMemTracer::realloc(ptr, size)
 #endif
 
 #ifndef LMT_TREAT_CHUNK
@@ -292,6 +302,46 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(chunk, header, size);
 	return (void*)(size_t(ptr) + HEADER_SIZE);
+}
+
+void *LiveMemTracer::realloc(void *ptr, size_t size)
+{
+	if (ptr == nullptr)
+	{
+		return alloc(size);
+	}
+	if (size == 0)
+	{
+		dealloc(ptr);
+		return nullptr;
+	}
+
+	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
+	Header *header = (Header*)(offset);
+
+	if (size == header->size)
+	{
+		return ptr;
+	}
+
+	Chunk *chunk = getChunk();
+	if (chunkIsFull(chunk))
+	{
+		chunk = getNextChunk();
+	}
+
+	logFreeInChunk(chunk, header);
+
+	chunk = getChunk();
+	if (chunkIsFull(chunk))
+	{
+		chunk = getNextChunk();
+	}
+
+	void *newPtr = ::realloc((void*)header, size + HEADER_SIZE);
+	header = (Header*)(newPtr);
+	logAllocInChunk(chunk, header, size);
+	return (void*)(size_t(newPtr) + HEADER_SIZE);
 }
 
 void LiveMemTracer::dealloc(void *ptr)
