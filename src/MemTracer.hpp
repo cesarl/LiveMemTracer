@@ -16,6 +16,10 @@
 #define LMT_CACHE_SIZE 16
 #endif
 
+#ifndef LMT_FRAME_TO_SKIP
+#define LMT_FRAME_TO_SKIP 3
+#endif
+
 #ifndef LMT_TREAT_CHUNK
 static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
 #endif
@@ -473,12 +477,12 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::
 {
 	Hash hash;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = CaptureStackBackTrace(3, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
+	uint32_t count = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
 
 	if (count == STACK_SIZE_PER_ALLOC)
 	{
 		void* tmpStack[500];
-		uint32_t tmpSize = CaptureStackBackTrace(3, 500, tmpStack, (PDWORD)&hash);
+		uint32_t tmpSize = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, 500, tmpStack, (PDWORD)&hash);
 
 		for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
 			stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
@@ -501,11 +505,11 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::
 	chunk->allocStackIndex[index] = chunk->stackIndex;
 	chunk->allocSize[index] = size;
 	chunk->allocHash[index] = hash;
-	chunk->allocStackSize[index] = count - 3;
+	chunk->allocStackSize[index] = count;
 	g_th_cache[g_th_cacheIndex] = hash;
 	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
 	chunk->allocIndex += 1;
-	chunk->stackIndex += count - 3;
+	chunk->stackIndex += count;
 }
 
 void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header)
@@ -604,39 +608,5 @@ void LiveMemTracer::display(float dt)
 	ImGui::End();
 }
 #endif
-
-//#include <iostream>
-//#include <fstream>
-//
-//void printStack()
-//{
-//	// Quote from Microsoft Documentation:
-//	// ## Windows Server 2003 and Windows XP:  
-//	// ## The sum of the FramesToSkip and FramesToCapture parameters must be less than 63.
-//	const int kMaxCallers = 62;
-//
-//	void         * callers_stack[kMaxCallers];
-//	unsigned short frames;
-//	SYMBOL_INFO  * symbol;
-//	HANDLE         process;
-//	process = GetCurrentProcess();
-//	SymInitialize(process, NULL, TRUE);
-//	frames = CaptureStackBackTrace(0, kMaxCallers, callers_stack, NULL);
-//	symbol = (SYMBOL_INFO *)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
-//	symbol->MaxNameLen = 255;
-//	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-//
-//	//out << "(" << sample_address << "): " << std::endl;
-//	const unsigned short  MAX_CALLERS_SHOWN = 6;
-//	frames = frames < MAX_CALLERS_SHOWN ? frames : MAX_CALLERS_SHOWN;
-//	for (unsigned int i = 0; i < frames; i++)
-//	{
-//		SymFromAddr(process, (DWORD64)(callers_stack[i]), 0, symbol);
-//		printf("*** %d: %s 0x%0X\n", i, symbol->Name, symbol->Address);
-//		//out << "*** " << i << ": " << callers_stack[i] << " " << symbol->Name << " - 0x" << symbol->Address << std::endl;
-//	}
-//
-//	free(symbol);
-//}
 
 #endif

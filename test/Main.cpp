@@ -141,10 +141,26 @@ struct FooBarFunctor
 };
 
 
+struct Tata
+{
+	char tata[1024];
+};
+
 struct Toto
 {
 	char toto[128];
-	Toto(){}
+	Tata *one;
+	Tata *two;
+	Toto()
+	{
+		one = new Tata();
+		two = new Tata();
+	}
+	~Toto()
+	{
+		delete one;
+		delete two;
+	}
 };
 
 #include <chrono>
