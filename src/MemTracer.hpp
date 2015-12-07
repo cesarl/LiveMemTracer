@@ -76,7 +76,7 @@ namespace LiveMemTracer
 #endif
 
 #ifndef LMT_TREE_DICTIONARY_SIZE
-#define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16
+#define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16 * 16
 #endif
 
 	inline void *alloc(size_t size);
@@ -201,11 +201,13 @@ namespace LiveMemTracer
 			{
 				pair->hash = hash;
 				pair->key = key;
+				++_size;
 			}
 			return pair;
 		}
 	private:
 		Pair _buffer[Capacity];
+		size_t _size;
 		static const size_t HASH_MODIFIER = 7;
 
 		inline size_t getHash(Key key) const
@@ -401,17 +403,13 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 	int stackSize = allocStack.stackSize;
 	stackSize -= 2;
 	uint8_t depth = 0;
-	Hash previousHash = 0;
 	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
 		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
-		if (previousHash != 0)
-		{
-			currentHash = combineHash(previousHash, currentHash);
-			currentHash = combineHash(depth * depth, currentHash);
-			previousHash = currentHash;
-		}
+		currentHash = combineHash((size_t(previousPtr)), currentHash);
+		currentHash = combineHash(depth * depth, currentHash);
+
 		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
 		currentPtr->count += size;
 		if (checkTree)
@@ -422,7 +420,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
 				if (it == std::end(previousPtr->to))
 				{
-					previousPtr->to.insert(std::lower_bound(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr), currentPtr);
+					previousPtr->to.push_back(currentPtr);
 				}
 			}
 			else
@@ -431,6 +429,14 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 				if (it == std::end(g_allocStackRoots))
 					g_allocStackRoots.push_back(currentPtr);
 			}
+		}
+		if (strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) != 0)
+		{
+			int toto = 12;
+		}
+		if (previousPtr && previousPtr->count >= 0 && previousPtr->count < currentPtr->count)
+		{
+			int fuckMe = 123;
 		}
 		previousPtr = currentPtr;
 		++depth;
