@@ -716,7 +716,7 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 		}
 
 		ImGui::SameLine();
-		if (ImGui::TreeNode(edge->name))
+		if (ImGui::TreeNode((void*)edge, edge->name))
 		{
 			if (updateData)
 				std::sort(std::begin(edge->to), std::end(edge->to), &edgeSortFunction);
@@ -731,7 +731,7 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 
 void LiveMemTracer::display(float dt)
 {
-	static bool displayTree = false;
+	static bool displayTree = true;
 	static bool filterEmptyAlloc = true;
 	static float updateRatio = 0.f;
 
