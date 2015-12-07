@@ -18,6 +18,8 @@
 #include "External/GLFW/glfw3.h"
 #include "External/imgui/imgui_impl_glfw_gl3.h"
 
+#include <string>
+
 static void error_callback(int error, const char* description)
 {
 	fprintf(stderr, "Error %d: %s\n", error, description);

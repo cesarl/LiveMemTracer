@@ -1,19 +1,8 @@
 #pragma once
 
-//#ifndef LMT_MALLOC
-//#define LMT_MALLOC(s) malloc(s)
-//#endif
-//
-//#ifndef LMT_MALLOC_ALIGNED
-//#define LMT_MALLOC_ALIGNED(s) malloc(s)
-//#endif
-
-#include <cstdint>    //uint32_t etc...
-
 #ifdef LMT_IMPL
 #include <atomic>     //std::atomic
 #include <cstdlib>    //malloc etc...
-#include <string>     //memset
 #include <Windows.h>  //CaptureStackBackTrace
 
 #include <vector>
@@ -48,7 +37,7 @@ namespace LiveMemTracer
 #ifdef LMT_IMPL
 
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
-#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 16
+#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 8
 #endif
 
 #ifndef LMT_STACK_SIZE_PER_ALLOC
@@ -56,7 +45,7 @@ namespace LiveMemTracer
 #endif
 
 #ifndef LMT_CHUNK_NUMBER_PER_THREAD
-#define LMT_CHUNK_NUMBER_PER_THREAD 16
+#define LMT_CHUNK_NUMBER_PER_THREAD 8
 #endif
 
 #ifndef LMT_CACHE_SIZE
@@ -68,15 +57,19 @@ namespace LiveMemTracer
 #endif
 
 #ifndef LMT_ALLOC_DICTIONARY_SIZE
-#define LMT_ALLOC_DICTIONARY_SIZE 1024 * 16 * 16
+#define LMT_ALLOC_DICTIONARY_SIZE 1024 * 16
 #endif
 
 #ifndef LMT_STACK_DICTIONARY_SIZE
-#define LMT_STACK_DICTIONARY_SIZE 1024 * 16 * 16
+#define LMT_STACK_DICTIONARY_SIZE 1024 * 16
 #endif
 
 #ifndef LMT_TREE_DICTIONARY_SIZE
-#define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16 * 16
+#define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16
+#endif
+
+#ifndef LMT_ASSERT
+#define LMT_ASSERT(condition, message) assert(condition)
 #endif
 
 	inline void *alloc(size_t size);
@@ -194,7 +187,7 @@ namespace LiveMemTracer
 		Pair *update(const Key &key)
 		{
 			const size_t hash = getHash(key);
-			assert(hash != HASH_INVALID);
+			LMT_ASSERT(hash != HASH_INVALID, "This slot is already used.");
 
 			Pair *pair = &_buffer[hash];
 			if (pair->hash == HASH_EMPTY)
@@ -218,7 +211,7 @@ namespace LiveMemTracer
 				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
 					return realHash;
 			}
-			assert(false);
+			LMT_ASSERT(false, "Dictionary is full or quadratic probing reach it's limits.");
 			return HASH_INVALID;
 		}
 	};
@@ -255,10 +248,11 @@ namespace LiveMemTracer
 
 	static const size_t                                         g_internalSharedMemoryUsed =
 		sizeof(g_allocStackRefTable)
-		+ sizeof(g_allocList)
 		+ sizeof(g_allocRefTable)
+		+ sizeof(g_allocList)
 		+ sizeof(g_tree)
 		+ sizeof(g_allocStackRoots)
+		+ sizeof(g_mutex)
 		+ sizeof(g_internalPerThreadMemoryUsed)
 		+ sizeof(size_t) /* itself */;
 
@@ -349,7 +343,7 @@ namespace SymbolGetter
 			hProcess = GetCurrentProcess();
 			if (!SymInitialize(hProcess, NULL, TRUE))
 			{
-				assert(false);
+				LMT_ASSERT(false, "SymInitialize failed.");
 			}
 			_initialized = true;
 		}
@@ -540,7 +534,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
 	Chunk *currentChunk = getChunk();
 	if (chunkIsFull(currentChunk) == false)
 	{
-		assert(false && "Why did you called me if current chunk is not full ?");
+		LMT_ASSERT(false, "Why did you called me if current chunk is not full ?");
 	}
 	if (currentChunk->treated.load() == ChunkStatus::PENDING)
 	{
@@ -618,7 +612,6 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::
 	if (found != uint8_t(-1))
 	{
 		index = chunk->allocIndex - found - 1;
-		assert(chunk->allocHash[index] == hash);
 		chunk->allocSize[index] += size;
 		return;
 	}
@@ -640,7 +633,6 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 	if (found != uint8_t(-1))
 	{
 		index = chunk->allocIndex - found - 1;
-		assert(chunk->allocHash[index] == header->hash);
 		chunk->allocSize[index] -= header->size;
 		return;
 	}
