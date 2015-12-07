@@ -21,18 +21,29 @@
 #include <mutex>
 #endif
 
+#ifndef LMT_ALLOC
+#define LMT_ALLOC(size) malloc(size)
+#endif
+
+#ifndef LMT_ALLOC_ALIGNED
+#define LMT_ALLOC_ALIGNED(size, alignment) malloc(size)
+#endif
+
+#ifndef LMT_DEALLOC
+#define LMT_DEALLOC(ptr) free(ptr)
+#endif
+
+#ifndef LMT_DEALLOC_ALIGNED
+#define LMT_DEALLOC_ALIGNED(ptr, alignment) free(ptr)
+#endif
+
+#ifndef LMT_DISPLAY
+#define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
+#endif
+
 namespace LiveMemTracer
 {
-	static inline void *alloc(size_t size);
-	static inline void *allocAligned(size_t size, size_t alignment);
-	static inline void dealloc(void *ptr);
-	static inline void deallocAligned(void *ptr);
-	static inline void display(float dt)
-#ifndef LMT_IMPL
-	{}
-#else
-		;
-#endif
+	void display(float dt);
 
 #ifdef LMT_IMPL
 
@@ -56,6 +67,44 @@ namespace LiveMemTracer
 #define LMT_FRAME_TO_SKIP 3
 #endif
 
+#ifndef LMT_ALLOC_DICTIONARY_SIZE
+#define LMT_ALLOC_DICTIONARY_SIZE 1024 * 16 * 16
+#endif
+
+#ifndef LMT_STACK_DICTIONARY_SIZE
+#define LMT_STACK_DICTIONARY_SIZE 1024 * 16 * 16
+#endif
+
+#ifndef LMT_TREE_DICTIONARY_SIZE
+#define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16
+#endif
+
+	inline void *alloc(size_t size);
+	inline void *allocAligned(size_t size, size_t alignment);
+	inline void dealloc(void *ptr);
+	inline void deallocAligned(void *ptr);
+
+#ifdef LMT_ALLOC
+#undef LMT_ALLOC
+#define LMT_ALLOC(size)LiveMemTracer::alloc(size)
+#endif
+
+#ifdef LMT_ALLOC_ALIGNED
+#undef LMT_ALLOC_ALIGNED
+#define LMT_ALLOC_ALIGNED(size, alignment)LiveMemTracer::allocAligned(size, alignment)
+#endif
+
+
+#ifdef LMT_DEALLOC
+#undef LMT_DEALLOC
+#define LMT_DEALLOC(ptr)LiveMemTracer::dealloc(ptr)
+#endif
+
+#ifdef LMT_DEALLOC_ALIGNED
+#undef LMT_DEALLOC_ALIGNED
+#define LMT_DEALLOC_ALIGNED(ptr, alignment)LiveMemTracer::deallocAligned(ptr)
+#endif
+
 #ifndef LMT_TREAT_CHUNK
 	static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
 #endif
@@ -64,6 +113,9 @@ namespace LiveMemTracer
 	static const size_t STACK_SIZE_PER_ALLOC = LMT_STACK_SIZE_PER_ALLOC;
 	static const size_t CHUNK_NUMBER = LMT_CHUNK_NUMBER_PER_THREAD;
 	static const size_t CACHE_SIZE = LMT_CACHE_SIZE;
+	static const size_t ALLOC_DICTIONARY_SIZE = LMT_ALLOC_DICTIONARY_SIZE;
+	static const size_t STACK_DICTIONARY_SIZE = LMT_STACK_DICTIONARY_SIZE;
+	static const size_t TREE_DICTIONARY_SIZE = LMT_TREE_DICTIONARY_SIZE;
 
 	typedef size_t Hash;
 
@@ -120,8 +172,8 @@ namespace LiveMemTracer
 	class Dictionary
 	{
 	public:
-		static const size_t   HASH_EMPTY = 0;
-		static const size_t   HASH_INVALID = Hash(-1);
+		static const size_t   HASH_EMPTY = Hash(-1);
+		static const size_t   HASH_INVALID = Hash(-2);
 
 		Dictionary()
 		{
@@ -183,13 +235,32 @@ namespace LiveMemTracer
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 	__declspec(thread) static bool                      g_th_initialized = false;
 
-	static Dictionary<Hash, AllocStack, 1024 * 16>      g_allocStackRefTable;
-	static Dictionary<Hash, Alloc, 1024 * 8>            g_allocRefTable;
-	static Alloc                                       *g_allocList = nullptr;
-	static std::vector<Edge*>                           g_allocStackRoots;
+	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
+	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
+	static Alloc                                               *g_allocList = nullptr;
 
-	static Dictionary<size_t, Edge, 1024 * 16>          g_tree;
-	static std::mutex                                   g_mutex;
+	static Dictionary<size_t, Edge, TREE_DICTIONARY_SIZE>       g_tree;
+
+	static std::vector<Edge*>                                   g_allocStackRoots;
+	static std::mutex                                           g_mutex;
+
+	static const size_t                                         g_internalPerThreadMemoryUsed =
+		sizeof(g_th_chunks)
+		+ sizeof(g_th_chunkIndex)
+		+ sizeof(g_th_cache)
+		+ sizeof(g_th_cacheIndex)
+		+ sizeof(g_th_initialized);
+
+	static const size_t                                         g_internalSharedMemoryUsed =
+		sizeof(g_allocStackRefTable)
+		+ sizeof(g_allocList)
+		+ sizeof(g_allocRefTable)
+		+ sizeof(g_tree)
+		+ sizeof(g_allocStackRoots)
+		+ sizeof(g_internalPerThreadMemoryUsed)
+		+ sizeof(size_t) /* itself */;
+
+	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = g_internalSharedMemoryUsed;
 
 	static inline Chunk *getChunk();
 	static inline bool chunkIsFull(const Chunk *chunk);
@@ -229,6 +300,8 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 
 void LiveMemTracer::dealloc(void *ptr)
 {
+	if (ptr == nullptr)
+		return;
 	Chunk *chunk = getChunk();
 	if (chunkIsFull(chunk))
 	{
@@ -242,6 +315,8 @@ void LiveMemTracer::dealloc(void *ptr)
 
 void LiveMemTracer::deallocAligned(void *ptr)
 {
+	if (ptr == nullptr)
+		return;
 	Chunk *chunk = getChunk();
 	if (chunkIsFull(chunk))
 	{
@@ -303,16 +378,40 @@ namespace SymbolGetter
 	}
 };
 
+template <class T>
+inline size_t combineHash(const T& val, size_t baseHash = 14695981039346656037ULL)
+{
+	const uint8_t* bytes = (uint8_t*)&val;
+	const size_t count = sizeof(val);
+	const size_t FNV_offset_basis = baseHash;
+	const size_t FNV_prime = 1099511628211ULL;
+
+	size_t hash = FNV_offset_basis;
+	for (size_t i = 0; i < count; ++i)
+	{
+		hash ^= (size_t)bytes[i];
+		hash *= FNV_prime;
+	}
+
+	return hash;
+}
+
 void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkTree)
 {
 	int stackSize = allocStack.stackSize;
-	stackSize -= 3;
+	stackSize -= 2;
 	uint8_t depth = 0;
-
+	Hash previousHash = 0;
 	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
-		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]) + depth * depth;
+		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
+		if (previousHash != 0)
+		{
+			currentHash = combineHash(previousHash, currentHash);
+			currentHash = combineHash(depth * depth, currentHash);
+			previousHash = currentHash;
+		}
 		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
 		currentPtr->count += size;
 		if (checkTree)
@@ -417,6 +516,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		memset(g_th_chunks, 0, sizeof(g_th_chunks));
 		memset(g_th_cache, 0, sizeof(g_th_cache));
 		g_th_initialized = true;
+		g_internalAllThreadsMemoryUsed.fetch_add(g_internalPerThreadMemoryUsed);
 	}
 	return &g_th_chunks[g_th_chunkIndex];
 }
@@ -551,23 +651,27 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 #ifdef LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
-struct EdgeSortFunction {
-	bool operator() (LiveMemTracer::Edge *a, LiveMemTracer::Edge *b) { return (a->count > b->count); }
-} edgeSortFunction;
+static bool edgeSortFunction(LiveMemTracer::Edge *a, LiveMemTracer::Edge *b) { return (a->count > b->count); }
 
-void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData, bool filter)
+static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData, bool filter)
 {
 	if (filter == false || edge->count)
 	{
-		if (edge->count > 1024)
-			ImGui::Text("%06i K", edge->count / 1024);
+		int64_t count = edge->count;
+		if (count < 10 * 1024)
+			ImGui::Text("%06f b", float(count));
+		else if (count <= 10 * 1024 * 1024)
+			ImGui::Text("%06f K", float(count) / 1024.f);
 		else
-			ImGui::Text("%06i b", edge->count);
+		{
+			ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
+		}
+
 		ImGui::SameLine();
 		if (ImGui::TreeNode(edge->name))
 		{
 			if (updateData)
-				std::sort(std::begin(edge->to), std::end(edge->to), edgeSortFunction);
+				std::sort(std::begin(edge->to), std::end(edge->to), &edgeSortFunction);
 			for (size_t i = 0; i < edge->to.size(); ++i)
 			{
 				recursiveImguiTreeDisplay(edge->to[i], updateData, filter);
@@ -594,7 +698,8 @@ void LiveMemTracer::display(float dt)
 	if (ImGui::Begin("LiveMemoryProfiler"))
 	{
 		ImGui::Checkbox("DisplayTree", &displayTree); ImGui::SameLine();
-		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc);
+		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc); ImGui::SameLine();
+		ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 		ImGui::Separator();
 		if (displayTree == false)
 		{
