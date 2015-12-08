@@ -67,10 +67,6 @@ namespace LiveMemTracer
 #define LMT_CACHE_SIZE 16
 #endif
 
-#ifndef LMT_FRAME_TO_SKIP
-#define LMT_FRAME_TO_SKIP 3
-#endif
-
 #ifndef LMT_ALLOC_DICTIONARY_SIZE
 #define LMT_ALLOC_DICTIONARY_SIZE 1024 * 16
 #endif
@@ -104,6 +100,8 @@ namespace LiveMemTracer
 	static const size_t ALLOC_DICTIONARY_SIZE = LMT_ALLOC_DICTIONARY_SIZE;
 	static const size_t STACK_DICTIONARY_SIZE = LMT_STACK_DICTIONARY_SIZE;
 	static const size_t TREE_DICTIONARY_SIZE = LMT_TREE_DICTIONARY_SIZE;
+	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
+	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
 
 	typedef size_t Hash;
 
@@ -266,7 +264,7 @@ namespace LiveMemTracer
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
-	static inline uint32_t getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash);
+	static inline uint32_t getCallstack(size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash);
 	#endif
 }
 
@@ -387,9 +385,10 @@ void LiveMemTracer::exit()
 
 //////////////////////////////////////////////////////////////////////////
 
-#ifdef LMT_PLATFORM_WINDOWS
+#if defined(LMT_PLATFORM_WINDOWS)
 #include "imagehlp.h"
 #pragma comment(lib, "imagehlp.lib")
+#elif defined(LMT_PLATFORM_ORBIS)
 #endif
 
 namespace SymbolGetter
@@ -416,9 +415,9 @@ namespace SymbolGetter
 
 	static const char *g_truncated = "Truncated\0";
 
-	static const char *getSymbol(void *ptr, void *& absoluteAddress)
+	static inline const char *getSymbol(void *ptr, void *& absoluteAddress)
+#if defined(LMT_PLATFORM_WINDOWS)
 	{
-#ifdef LMT_PLATFORM_WINDOWS
 		init();
 
 		DWORD64 dwDisplacement = 0;
@@ -437,10 +436,20 @@ namespace SymbolGetter
 		}
 		absoluteAddress = (void*)(DWORD64(ptr) - dwDisplacement);
 		return _strdup(pSymbol->Name);
-#else
-		return g_truncated;
-#endif
 	}
+#elif defined(LMT_PLATFORM_ORBIS)
+	{
+		if (size_t(ptr) == size_t(-1))
+		{
+			return g_truncated;
+		}
+	}
+#else
+	{
+		static_assert(false, "Not other platform implemented than Orbis and Windows");
+		return nullptr;
+	}
+#endif
 };
 
 template <class T>
@@ -657,55 +666,62 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 	return uint8_t(-1);
 }
 
-uint32_t LiveMemTracer::getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, Hash *hash)
-{
+uint32_t LiveMemTracer::getCallstack(size_t maxStackSize, void **stack, Hash *hash)
 #if defined(LMT_PLATFORM_WINDOWS)
-	uint32_t count = CaptureStackBackTrace(frameToSkip, maxStackSize, stack, (PDWORD)hash);
+{
+	uint32_t count = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, maxStackSize, stack, (PDWORD)hash);
 
-	if (count == STACK_SIZE_PER_ALLOC)
+	if (count == maxStackSize)
 	{
-		void* tmpStack[500];
-		uint32_t tmpSize = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, 500, tmpStack, (PDWORD)hash);
+		void* tmpStack[INTERNAL_MAX_STACK_DEPTH];
+		uint32_t tmpSize = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, INTERNAL_MAX_STACK_DEPTH, tmpStack, (PDWORD)hash);
 
-		for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
-			stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
+		for (uint32_t i = 0; i < maxStackSize - 1; i++)
+			stack[maxStackSize - 1 - i] = tmpStack[tmpSize - 1 - i];
 		stack[0] = (void*)~0;
 	}
 	return count;
+}
 #elif defined(LMT_PLATFORM_ORBIS)
-	struct OrbisStackFrame 
-	{
-		uintptr_t		 nextFrame;
-		uintptr_t		 func;
-		uintptr_t		 empty;
-	};
-
-	OrbisStackFrame* orbisStack = (OrbisStackFrame*)__builtin_frame_address(0);
-	uint32_t count = 0;
+{
+	const uintptr_t *fp = (const uintptr_t*) __builtin_frame_address(0);
+	int depth = -INTERNAL_FRAME_TO_SKIP;
 	*hash = 0;
-	while(orbisStack != nullptr)
+	void* tmpStack[INTERNAL_MAX_STACK_DEPTH];
+	while (fp && depth < INTERNAL_MAX_STACK_DEPTH)
 	{
-		*hash = combineHash(Hash(orbisStack->func), *hash);
-		stack[count] = (void*)(orbisStack->func);
-		count++;
+		const uintptr_t parent = fp[0];
+		const uintptr_t returnAddr = fp[1];
 
-		if(count >= maxStackSize)
-			break;
+		if (depth >= 0)
+		{
+			tmpStack[depth] = (void*)returnAddr;
+			*hash = combineHash(Hash(returnAddr), *hash);
+		}
 
-		orbisStack = (OrbisStackFrame*)(orbisStack->nextFrame);
+		++depth;
+		fp = (uintptr_t*) parent;
 	}
-	return count;
+	int mss = depth >= maxStackSize ? maxStackSize - 1 : depth;
+	uint32_t i = 0;
+	for (; i < mss; i++)
+		stack[mss - i] = tmpStack[depth - i];
+	if (depth >= maxStackSize)
+		stack[0] = (void*)~0;
+	return i;
+}
 #else
+{
 	static_assert(false, "Not other platform implemented than Orbis and Windows");
 	return -1;
-#endif
 }
+#endif
 
 void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
 {
 	Hash hash;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = getCallstack(LMT_FRAME_TO_SKIP, STACK_SIZE_PER_ALLOC, stack, &hash);
+	uint32_t count = getCallstack(STACK_SIZE_PER_ALLOC, stack, &hash);
 
 	header->size = size;
 	header->hash = hash;
