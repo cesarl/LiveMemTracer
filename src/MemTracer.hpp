@@ -1,15 +1,5 @@
 #pragma once
 
-#ifdef LMT_IMPL
-#include <atomic>     //std::atomic
-#include <cstdlib>    //malloc etc...
-#include <Windows.h>  //CaptureStackBackTrace
-
-#include <vector>
-#include <algorithm>
-#include <mutex>
-#endif
-
 #ifndef LMT_ENABLED
 #define LMT_ALLOC(size)malloc(size)
 #define LMT_ALLOC_ALIGNED(size, alignment)malloc(size)
@@ -28,6 +18,25 @@
 #define LMT_REALLOC(ptr, size)LiveMemTracer::realloc(ptr, size)
 #define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
 #define LMT_EXIT() LiveMemTracer::exit()
+
+#ifdef LMT_IMPL
+
+#if !defined(LMT_PLATFORM_WINDOWS) && !defined(LMT_PLATFORM_ORBIS)
+static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
+#endif
+
+#include <atomic>     //std::atomic
+#include <cstdlib>    //malloc etc...
+#include <vector>
+#include <algorithm>
+#include <mutex>
+
+#ifdef LMT_PLATFORM_WINDOWS
+#include <Windows.h>  //CaptureStackBackTrace
+#endif
+
+#endif
+
 
 namespace LiveMemTracer
 {
@@ -79,7 +88,7 @@ namespace LiveMemTracer
 #endif
 
 #ifndef LMT_TREAT_CHUNK
-	static_assert(false, "You have to define LMT_TREAT_CHUNK(chunk)");
+#define LMT_TREAT_CHUNK LiveMemTracer::treatChunk(chunk)
 #endif
 
 #ifndef LMT_IMPLEMENTED
@@ -207,7 +216,8 @@ namespace LiveMemTracer
 		int64_t count;
 		const char *name;
 		std::vector<Edge*> to;
-		Edge() : count(0), name(nullptr) {}
+		Edge *from;
+		Edge() : count(0), name(nullptr), from(nullptr) {}
 	};
 
 	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
@@ -243,7 +253,7 @@ namespace LiveMemTracer
 		+ sizeof(g_internalPerThreadMemoryUsed)
 		+ sizeof(size_t) /* itself */;
 
-	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = g_internalSharedMemoryUsed;
+	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = {g_internalSharedMemoryUsed};
 
 	static inline Chunk *getChunk();
 	static inline bool chunkIsFull(const Chunk *chunk);
@@ -255,6 +265,18 @@ namespace LiveMemTracer
 }
 
 #ifdef LMT_IMPL
+
+#if defined(LMT_PLATFORM_WINDOWS)
+#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)_aligned_offset_malloc(size, alignment, offset)
+#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)_aligned_free(ptr)
+#elif defined(LMT_PLATFORM_ORBIS)
+#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)nullptr
+#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)free(ptr)
+#else
+#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)nullptr
+#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)do{}while(0)
+#endif
+
 void *LiveMemTracer::alloc(size_t size)
 {
 	Chunk *chunk = getChunk();
@@ -275,7 +297,7 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 	{
 		chunk = getNextChunk();
 	}
-	void *ptr = _aligned_offset_malloc(size + HEADER_SIZE, alignment, HEADER_SIZE);
+	void *ptr = INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size + HEADER_SIZE, alignment, HEADER_SIZE);
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(chunk, header, size);
 	return (void*)(size_t(ptr) + HEADER_SIZE);
@@ -348,7 +370,7 @@ void LiveMemTracer::deallocAligned(void *ptr)
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
 	logFreeInChunk(chunk, header);
-	_aligned_free(offset);
+	INTERNAL_LMT_DEALLOC_ALIGNED(offset);
 }
 
 void LiveMemTracer::exit()
@@ -359,14 +381,17 @@ void LiveMemTracer::exit()
 
 //////////////////////////////////////////////////////////////////////////
 
+#ifdef LMT_PLATFORM_WINDOWS
 #include "imagehlp.h"
 #pragma comment(lib, "imagehlp.lib")
+#endif
 
 namespace SymbolGetter
 {
 	static int _initialized = 0;
 	static inline void init()
 	{
+#ifdef LMT_PLATFORM_WINDOWS
 		if (_initialized == false)
 		{
 			HANDLE hProcess;
@@ -380,12 +405,14 @@ namespace SymbolGetter
 			}
 			_initialized = true;
 		}
+#endif
 	}
 
 	static const char *g_truncated = "Truncated\0";
 
 	static const char *getSymbol(void *ptr, void *& absoluteAddress)
 	{
+#ifdef LMT_PLATFORM_WINDOWS
 		init();
 
 		DWORD64 dwDisplacement = 0;
@@ -404,6 +431,9 @@ namespace SymbolGetter
 		}
 		absoluteAddress = (void*)(DWORD64(ptr) - dwDisplacement);
 		return _strdup(pSymbol->Name);
+#else
+		return g_truncated;
+#endif
 	}
 };
 
@@ -449,6 +479,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 				{
 					previousPtr->to.push_back(currentPtr);
 				}
+				currentPtr->from = previousPtr;
 			}
 			else
 			{
@@ -620,22 +651,55 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 	return uint8_t(-1);
 }
 
-
-void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
+uint32_t getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash)
 {
-	Hash hash;
-	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, STACK_SIZE_PER_ALLOC, stack, (PDWORD)&hash);
+#if defined(LMT_PLATFORM_WINDOWS)
+	uint32_t count = CaptureStackBackTrace(frameToSkip, maxStackSize, stack, (PDWORD)hash);
 
 	if (count == STACK_SIZE_PER_ALLOC)
 	{
 		void* tmpStack[500];
-		uint32_t tmpSize = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, 500, tmpStack, (PDWORD)&hash);
+		uint32_t tmpSize = CaptureStackBackTrace(LMT_FRAME_TO_SKIP, 500, tmpStack, (PDWORD)hash);
 
 		for (uint32_t i = 0; i < STACK_SIZE_PER_ALLOC - 1; i++)
 			stack[STACK_SIZE_PER_ALLOC - 1 - i] = tmpStack[tmpSize - 1 - i];
 		stack[0] = (void*)~0;
 	}
+	return count;
+#elif defined(LMT_PLATFORM_ORBIS)
+	struct OrbisStackFrame 
+	{
+		uintptr_t		 nextFrame;
+		uintptr_t		 func;
+		uintptr_t		 empty;
+	};
+
+	OrbisStackFrame* orbisStack = (OrbisStackFrame*)__builtin_frame_address(0);
+	uint32_t count = 0;
+	*hash = 0;
+	while(orbisStack != nullptr)
+	{
+		*hash = combineHash(LiveMemTracer::Hash(orbisStack->func), *hash);
+		stack[count] = (void*)(orbisStack->func);
+		count++;
+
+		if(count >= maxStackSize)
+			break;
+
+		orbisStack = (OrbisStackFrame*)(orbisStack->nextFrame);
+	}
+	return count;
+#else
+	static_assert(false, "Not other platform implemented than Orbis and Windows");
+	return -1;
+#endif
+}
+
+void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
+{
+	Hash hash;
+	void **stack = &chunk->stackBuffer[chunk->stackIndex];
+	uint32_t count = getCallstack(LMT_FRAME_TO_SKIP, STACK_SIZE_PER_ALLOC, stack, &hash);
 
 	header->size = size;
 	header->hash = hash;
@@ -711,10 +775,20 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 	}
 }
 
+struct SearchNode
+{
+	const char *name;
+	int64_t count;
+	std::vector<SearchNode> callers;
+};
+
 void LiveMemTracer::display(float dt)
 {
 	static bool filterEmptyAlloc = true;
 	static float updateRatio = 0.f;
+	static const size_t SEARCH_STR_LENGTH = 1024;
+	static char searchStr[SEARCH_STR_LENGTH];
+	bool updateSearch = false;
 
 	bool updateData = false;
 	updateRatio += dt;
@@ -727,25 +801,40 @@ void LiveMemTracer::display(float dt)
 	if (ImGui::Begin("LiveMemoryProfiler"))
 	{
 		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc); ImGui::SameLine();
+		if (ImGui::InputText("Search", searchStr, SEARCH_STR_LENGTH))
+		{
+			updateSearch = true;
+		}
+		ImGui::SameLine();
 		ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 		ImGui::Separator();
 
 		std::lock_guard<std::mutex> lock(g_mutex);
-		if (updateData)
-			std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
-		Alloc *allocList = g_allocList;
-		ImGui::Columns(2);
-		ImGui::Text("Size");
-		ImGui::NextColumn();
-		ImGui::Text("Stack");
-		ImGui::NextColumn();
-		ImGui::Separator();
-		ImGui::Columns(1);
-		for (auto &e : g_allocStackRoots)
-		{
-			recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
-		}
 
+		if (updateSearch && strlen(searchStr) > 0)
+		{
+			Alloc *allocList = g_allocList;
+
+
+		}
+		else
+		{
+			if (updateData)
+			{
+				std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
+			}
+			ImGui::Columns(2);
+			ImGui::Text("Size");
+			ImGui::NextColumn();
+			ImGui::Text("Stack");
+			ImGui::NextColumn();
+			ImGui::Separator();
+			ImGui::Columns(1);
+			for (auto &e : g_allocStackRoots)
+			{
+				recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
+			}
+		}
 	}
 	ImGui::End();
 }
