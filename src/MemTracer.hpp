@@ -88,7 +88,7 @@ namespace LiveMemTracer
 #endif
 
 #ifndef LMT_TREAT_CHUNK
-#define LMT_TREAT_CHUNK LiveMemTracer::treatChunk(chunk)
+#define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk)
 #endif
 
 #ifndef LMT_IMPLEMENTED
@@ -253,7 +253,12 @@ namespace LiveMemTracer
 		+ sizeof(g_internalPerThreadMemoryUsed)
 		+ sizeof(size_t) /* itself */;
 
-	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = {g_internalSharedMemoryUsed};
+	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed =
+#if defined(LMT_PLATFORM_WINDOWS)
+		g_internalSharedMemoryUsed;
+#elif defined(LMT_PLATFORM_ORBIS)
+	   {g_internalSharedMemoryUsed};
+#endif
 
 	static inline Chunk *getChunk();
 	static inline bool chunkIsFull(const Chunk *chunk);
@@ -261,7 +266,8 @@ namespace LiveMemTracer
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
-#endif
+	static inline uint32_t getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash);
+	#endif
 }
 
 #ifdef LMT_IMPL
@@ -651,7 +657,7 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 	return uint8_t(-1);
 }
 
-uint32_t getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash)
+uint32_t LiveMemTracer::getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, Hash *hash)
 {
 #if defined(LMT_PLATFORM_WINDOWS)
 	uint32_t count = CaptureStackBackTrace(frameToSkip, maxStackSize, stack, (PDWORD)hash);
@@ -679,7 +685,7 @@ uint32_t getCallstack(size_t frameToSkip, size_t maxStackSize, void **stack, Liv
 	*hash = 0;
 	while(orbisStack != nullptr)
 	{
-		*hash = combineHash(LiveMemTracer::Hash(orbisStack->func), *hash);
+		*hash = combineHash(Hash(orbisStack->func), *hash);
 		stack[count] = (void*)(orbisStack->func);
 		count++;
 
