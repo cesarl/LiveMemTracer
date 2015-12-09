@@ -255,7 +255,7 @@ namespace LiveMemTracer
 #if defined(LMT_PLATFORM_WINDOWS)
 		g_internalSharedMemoryUsed;
 #elif defined(LMT_PLATFORM_ORBIS)
-	   {g_internalSharedMemoryUsed};
+	{g_internalSharedMemoryUsed};
 #endif
 
 	static inline Chunk *getChunk();
@@ -265,7 +265,7 @@ namespace LiveMemTracer
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
 	static inline uint32_t getCallstack(size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash);
-	#endif
+#endif
 }
 
 #ifdef LMT_IMPL
@@ -684,7 +684,7 @@ uint32_t LiveMemTracer::getCallstack(size_t maxStackSize, void **stack, Hash *ha
 }
 #elif defined(LMT_PLATFORM_ORBIS)
 {
-	const uintptr_t *fp = (const uintptr_t*) __builtin_frame_address(0);
+	const uintptr_t *fp = (const uintptr_t*)__builtin_frame_address(0);
 	int depth = -INTERNAL_FRAME_TO_SKIP;
 	*hash = 0;
 	void* tmpStack[INTERNAL_MAX_STACK_DEPTH];
@@ -700,7 +700,7 @@ uint32_t LiveMemTracer::getCallstack(size_t maxStackSize, void **stack, Hash *ha
 		}
 
 		++depth;
-		fp = (uintptr_t*) parent;
+		fp = (uintptr_t*)parent;
 	}
 	int mss = depth >= maxStackSize ? maxStackSize - 1 : depth;
 	uint32_t i = 0;
@@ -768,6 +768,41 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 #ifdef LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
+struct Match
+{
+	LiveMemTracer::Edge* edge;
+	uint8_t              depth;
+	size_t               next = -1;
+};
+
+static void recursiveFilter(LiveMemTracer::Edge *edge, std::vector<Match> &matchs, std::vector<Match> &pool, const char *search, uint8_t depth)
+{
+	++depth;
+	for (auto &e : edge->to)
+	{
+		if (strstr(e->name, search) != nullptr)
+		{
+			matchs.resize(matchs.size() + 1);
+			Match *match = &matchs.back();
+			match->depth = depth;
+			match->edge = e;
+			auto ec = e;
+			size_t index = pool.size();
+			pool.resize(pool.size() + depth + 1);
+			while (ec != nullptr)
+			{
+				match->next = index;
+				match = &pool[index];
+				match->edge = ec->from;
+				match->depth = depth - size_t(index);
+				ec = ec->from;
+				++index;
+			}
+		}
+		recursiveFilter(e, matchs, pool, search, depth);
+	}
+}
+
 static bool edgeSortFunction(LiveMemTracer::Edge *a, LiveMemTracer::Edge *b) { return (a->count > b->count); }
 
 static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData, bool filter)
@@ -796,13 +831,6 @@ static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData
 		}
 	}
 }
-
-struct SearchNode
-{
-	const char *name;
-	int64_t count;
-	std::vector<SearchNode> callers;
-};
 
 void LiveMemTracer::display(float dt)
 {
@@ -833,11 +861,80 @@ void LiveMemTracer::display(float dt)
 
 		std::lock_guard<std::mutex> lock(g_mutex);
 
-		if (updateSearch && strlen(searchStr) > 0)
+		static std::vector<Match> matchs; static std::vector<Match> pool;
+
+		if (updateSearch)
 		{
-			Alloc *allocList = g_allocList;
+			matchs.clear(); pool.clear();
+			if (strlen(searchStr) > 0)
+			{
+				for (auto &e : g_allocStackRoots)
+				{
+					recursiveFilter(e, matchs, pool, searchStr, 0);
+				}
+			}
+		}
+
+		if (matchs.size())
+		{
+			static size_t elemPerPage = 50;
+			static size_t currentPage = 0;
+
+			if (ImGui::Button("Prev page") && currentPage > 0)
+			{
+				--currentPage;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Next page"))
+			{
+				++currentPage;
+			}
+
+			if (matchs.size() < currentPage * elemPerPage)
+			{
+				currentPage = 0;
+			}
 
 
+			ImGui::Columns(2);
+			ImGui::Text("Size");
+			ImGui::NextColumn();
+			ImGui::Text("Stack");
+			ImGui::NextColumn();
+			ImGui::Separator();
+			ImGui::Columns(1);
+
+			size_t elemCounter = currentPage * elemPerPage;
+			size_t elemCounterMax = (currentPage + 1) * elemPerPage >= matchs.size() ? matchs.size() : (currentPage + 1) * elemPerPage;
+			for (; elemCounter < elemCounterMax; ++elemCounter)
+			{
+				size_t opened = 0;
+				Match *match = &matchs[elemCounter];
+				while (match && match->edge)
+				{
+					if (ImGui::TreeNode(match->edge, match->edge->name))
+					{
+						ImGui::SameLine();
+						int64_t count = match->edge->count;
+						if (count < 10 * 1024)
+							ImGui::Text("%06f b", float(count));
+						else if (count <= 10 * 1024 * 1024)
+							ImGui::Text("%06f K", float(count) / 1024.f);
+						else
+							ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
+						++opened;
+						if (match->next == -1)
+							break;
+						match = &pool[match->next];
+						continue;
+					}
+					break;
+				}
+				while (0 < opened--)
+				{
+					ImGui::TreePop();
+				}
+			}
 		}
 		else
 		{
