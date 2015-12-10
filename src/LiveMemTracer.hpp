@@ -105,6 +105,7 @@ namespace LiveMemTracer
 	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
 	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
+	static const size_t HISTORY_FRAME_NUMBER = 120;
 
 	typedef size_t Hash;
 
@@ -262,12 +263,15 @@ namespace LiveMemTracer
 
 	namespace Renderer
 	{
-		struct Match
+		struct Histogram
 		{
-			Edge                 *edge;
-			uint8_t              depth;
-			size_t               next;
-			Match() : edge(nullptr), depth(0), next(-1) {}
+			Alloc *alloc;
+			float count[HISTORY_FRAME_NUMBER];
+			size_t  cursor;
+			Histogram() : alloc(nullptr), cursor(0)
+			{
+				memset(count, 0, sizeof(count));
+			}
 		};
 
 		enum DisplayType
@@ -282,16 +286,14 @@ namespace LiveMemTracer
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
-		static std::vector<Match>                  g_matchs;
-		static std::vector<Match>                  g_pool;
 		static DisplayType                         g_displayType = CALLER;
-
+		static std::vector<Histogram>              g_histograms;
 		static std::vector<Alloc*>                 g_allocMatchs;
 
 		inline bool searchAlloc();
 		void displayCaller(Edge *caller);
-		inline void recursiveFilter(LiveMemTracer::Edge *edge, uint8_t depth);
-		//inline void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge);
+		inline void updateHistograms();
+		inline void createHistogram(Alloc *alloc);
 		inline void display(float dt);
 	}
 
@@ -725,62 +727,6 @@ namespace LiveMemTracer
 			return g_allocMatchs.empty() == false;
 		}
 
-		void recursiveFilter(Edge *edge, uint8_t depth)
-		{
-			++depth;
-			for (auto &e : edge->to)
-			{
-				if (strstr(e->alloc->str, g_searchStr) != nullptr)
-				{
-					g_matchs.resize(g_matchs.size() + 1);
-					Match *match = &g_matchs.back();
-					match->depth = depth;
-					match->edge = e;
-					auto ec = e;
-					size_t index = g_pool.size();
-					g_pool.resize(g_pool.size() + depth + 1);
-					while (ec != nullptr)
-					{
-						match->next = index;
-						match = &g_pool[index];
-						match->edge = ec->from;
-						match->depth = depth - size_t(index);
-						ec = ec->from;
-						++index;
-					}
-				}
-				recursiveFilter(e, depth);
-			}
-		}
-
-		inline bool edgeSortFunction(Edge *a, Edge *b) { return (a->count > b->count); }
-
-		//void recursiveImguiTreeDisplay(Edge *edge)
-		//{
-		//	if (g_filterEmptyAlloc == false || edge->count)
-		//	{
-		//		int64_t count = edge->count;
-		//		if (count < 10 * 1024)
-		//			ImGui::Text("%06f b", float(count));
-		//		else if (count <= 10 * 1024 * 1024)
-		//			ImGui::Text("%06f K", float(count) / 1024.f);
-		//		else
-		//		{
-		//			ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
-		//		}
-		//		ImGui::SameLine();
-		//		if (ImGui::TreeNode((void*)edge, edge->name))
-		//		{
-		//			//std::sort(std::begin(edge->to), std::end(edge->to), &edgeSortFunction);
-		//			for (size_t i = 0; i < edge->to.size(); ++i)
-		//			{
-		//				recursiveImguiTreeDisplay(edge->to[i]);
-		//			}
-		//			ImGui::TreePop();
-		//		}
-		//	}
-		//}
-
 		void displayCaller(Edge *caller)
 		{
 			if (!caller)
@@ -796,6 +742,14 @@ namespace LiveMemTracer
 			float size = formatMemoryString(caller->lastCount, suffix);
 			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix); ImGui::NextColumn();
 			ImGui::Text("%s", caller->alloc->str); ImGui::NextColumn();
+			if (ImGui::BeginPopupContextItem("Options"))
+			{
+				if (ImGui::Selectable("Watch"))
+				{
+					createHistogram(caller->alloc);
+				}
+				ImGui::EndPopup();
+			}
 			if (opened)
 			{
 				for (auto &to : caller->to)
@@ -803,6 +757,44 @@ namespace LiveMemTracer
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
+		}
+
+		void updateHistograms()
+		{
+			auto it = std::begin(g_histograms);
+			while (it != std::end(g_histograms))
+			{
+				auto &h = *it;
+				if (ImGui::Begin(h.alloc->str, nullptr, ImVec2(300, 200)))
+				{
+					h.count[h.cursor] = 0.f;
+					auto edge = h.alloc->edges;
+					while (edge)
+					{
+						h.count[h.cursor] += float(edge->count);
+						edge = edge->same;
+					}
+					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
+					ImGui::PlotLines("", h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(300, 200));
+					++it;
+				}
+				else
+				{
+					it = g_histograms.erase(it);
+				}
+				ImGui::End();
+			}
+		}
+		void createHistogram(Alloc *alloc)
+		{
+			for (auto &h : g_histograms)
+			{
+				if (h.alloc == alloc)
+					return;
+			}
+			g_histograms.resize(g_histograms.size() + 1);
+			auto &last = g_histograms.back();
+			last.alloc = alloc;
 		}
 
 		void render(float dt)
@@ -841,7 +833,6 @@ namespace LiveMemTracer
 
 				if (updateSearch)
 				{
-					g_matchs.clear(); g_pool.clear();
 					if (strlen(g_searchStr) > 0)
 					{
 						searchAlloc();
@@ -872,88 +863,9 @@ namespace LiveMemTracer
 						ImGui::Separator();
 					}
 				}
-
-				//if (g_matchs.size())
-				//{
-				//	static size_t elemPerPage = 50;
-				//	static size_t currentPage = 0;
-
-				//	if (ImGui::Button("Prev page") && currentPage > 0)
-				//	{
-				//		--currentPage;
-				//	}
-				//	ImGui::SameLine();
-				//	if (ImGui::Button("Next page"))
-				//	{
-				//		++currentPage;
-				//	}
-
-				//	if (g_matchs.size() < currentPage * elemPerPage)
-				//	{
-				//		currentPage = 0;
-				//	}
-
-
-				//	ImGui::Columns(2);
-				//	ImGui::Text("Size");
-				//	ImGui::NextColumn();
-				//	ImGui::Text("Stack");
-				//	ImGui::NextColumn();
-				//	ImGui::Separator();
-				//	ImGui::Columns(1);
-
-				//	size_t elemCounter = currentPage * elemPerPage;
-				//	size_t elemCounterMax = (currentPage + 1) * elemPerPage >= g_matchs.size() ? g_matchs.size() : (currentPage + 1) * elemPerPage;
-				//	for (; elemCounter < elemCounterMax; ++elemCounter)
-				//	{
-				//		size_t opened = 0;
-				//		Match *match = &g_matchs[elemCounter];
-				//		while (match && match->edge)
-				//		{
-				//			if (ImGui::TreeNode(match->edge, match->edge->name))
-				//			{
-				//				ImGui::SameLine();
-				//				int64_t count = match->edge->count;
-				//				if (count < 10 * 1024)
-				//					ImGui::Text("%06f b", float(count));
-				//				else if (count <= 10 * 1024 * 1024)
-				//					ImGui::Text("%06f K", float(count) / 1024.f);
-				//				else
-				//					ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
-				//				++opened;
-				//				if (match->next == -1)
-				//					break;
-				//				match = &g_pool[match->next];
-				//				continue;
-				//			}
-				//			break;
-				//		}
-				//		while (0 < opened--)
-				//		{
-				//			ImGui::TreePop();
-				//		}
-				//	}
-				//}
-				//else
-				//{
-				//	if (updateData)
-				//	{
-				//		std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
-				//	}
-				//	ImGui::Columns(2);
-				//	ImGui::Text("Size");
-				//	ImGui::NextColumn();
-				//	ImGui::Text("Stack");
-				//	ImGui::NextColumn();
-				//	ImGui::Separator();
-				//	ImGui::Columns(1);
-				//	for (auto &e : g_allocStackRoots)
-				//	{
-				//		recursiveImguiTreeDisplay(e);
-				//	}
-				//}
 			}
 			ImGui::End();
+			updateHistograms();
 		}
 	}
 }
