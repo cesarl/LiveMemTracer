@@ -57,6 +57,12 @@
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk)
 #endif
 
+#if defined(LMT_DEBUG_DEV)
+#define LMT_DEBUG_ASSERT(condition, message) assert(condition,message)
+#else
+#define LMT_DEBUG_ASSERT(condition, message) do{}while(0)
+#endif
+
 #ifndef LMT_IMPLEMENTED
 #define LMT_IMPLEMENTED 1
 #else
@@ -102,6 +108,13 @@ namespace LiveMemTracer
 
 	typedef size_t Hash;
 
+	struct Header
+	{
+		Hash    hash;
+		size_t  size;
+	};
+	static const size_t HEADER_SIZE = sizeof(Header);
+
 	enum ChunkStatus
 	{
 		TREATED = 0,
@@ -120,16 +133,7 @@ namespace LiveMemTracer
 		std::atomic<ChunkStatus> treated;
 	};
 
-	struct Header
-	{
-		Hash    hash;
-		size_t  size;
-	};
-
-	struct AllocStack;
-
-
-	static const size_t HEADER_SIZE = sizeof(Header);
+	struct Edge;
 
 	struct Alloc
 	{
@@ -137,7 +141,8 @@ namespace LiveMemTracer
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
-		Alloc() : counter(0), str(nullptr), next(nullptr), shared(nullptr) {}
+		Edge  *edges;
+		Alloc() : counter(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
 	};
 
 	struct AllocStack
@@ -147,6 +152,16 @@ namespace LiveMemTracer
 		Alloc *stackAllocs[STACK_SIZE_PER_ALLOC];
 		uint8_t stackSize;
 		AllocStack() : hash(0), counter(0), stackSize(0) {}
+	};
+
+	struct Edge
+	{
+		int64_t count;
+		const char *name;
+		std::vector<Edge*> to;
+		Edge *from;
+		Edge *same;
+		Edge() : count(0), name(nullptr), from(nullptr), same(nullptr) {}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -175,7 +190,7 @@ namespace LiveMemTracer
 		Pair *update(const Key &key)
 		{
 			const size_t hash = getHash(key);
-			LMT_ASSERT(hash != HASH_INVALID, "This slot is already used.");
+			LMT_DEBUG_ASSERT(hash != HASH_INVALID, "This slot is already used.");
 
 			Pair *pair = &_buffer[hash];
 			if (pair->hash == HASH_EMPTY)
@@ -202,15 +217,6 @@ namespace LiveMemTracer
 			LMT_ASSERT(false, "Dictionary is full or quadratic probing reach it's limits.");
 			return HASH_INVALID;
 		}
-	};
-
-	struct Edge
-	{
-		int64_t count;
-		const char *name;
-		std::vector<Edge*> to;
-		Edge *from;
-		Edge() : count(0), name(nullptr), from(nullptr) {}
 	};
 
 	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
@@ -402,10 +408,7 @@ bool LiveMemTracer::chunkIsFull(const LiveMemTracer::Chunk *chunk)
 LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
 {
 	Chunk *currentChunk = getChunk();
-	if (chunkIsFull(currentChunk) == false)
-	{
-		LMT_ASSERT(false, "Why did you called me if current chunk is not full ?");
-	}
+	LMT_DEBUG_ASSERT(chunkIsFull(currentChunk) == true, "Why did you called me if current chunk is not full ?");
 	if (currentChunk->treated.load() == ChunkStatus::PENDING)
 	{
 		// That's a recursive call, so we go to the next chunk
@@ -589,7 +592,14 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 		currentPtr->count += size;
 		if (checkTree)
 		{
-			currentPtr->name = allocStack.stackAllocs[stackSize]->str;
+			if (!currentPtr->name)
+			{
+				LMT_DEBUG_ASSERT(currentPtr->same == nullptr, "Edge already have a same pointer defined.");
+				currentPtr->name = allocStack.stackAllocs[stackSize]->str;
+				currentPtr->same = allocStack.stackAllocs[stackSize]->edges;
+				allocStack.stackAllocs[stackSize]->edges = currentPtr;
+			}
+
 			if (previousPtr != nullptr)
 			{
 				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
@@ -606,14 +616,8 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 					g_allocStackRoots.push_back(currentPtr);
 			}
 		}
-		if (strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) != 0)
-		{
-			int toto = 12;
-		}
-		if (previousPtr && previousPtr->count >= 0 && previousPtr->count < currentPtr->count)
-		{
-			int fuckMe = 123;
-		}
+		LMT_DEBUG_ASSERT(strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) == 0, "Name collision.");
+
 		previousPtr = currentPtr;
 		++depth;
 		--stackSize;

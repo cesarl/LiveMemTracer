@@ -1,9 +1,10 @@
-//#define LMT_ENABLED 1
+#define LMT_ENABLED 1
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 16
 #define LMT_CACHE_SIZE 16
 #define LMT_PLATFORM_WINDOWS 1
+#define LMT_DEBUG_DEV 1
 
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk);
 
