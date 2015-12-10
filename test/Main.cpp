@@ -3,6 +3,7 @@
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 16
 #define LMT_CACHE_SIZE 16
+#define LMT_PLATFORM_WINDOWS 1
 
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk);
 
@@ -10,7 +11,7 @@
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
 
-#include "../Src/MemTracer.hpp"
+#include "../Src/LiveMemTracer.hpp"
 
 #include <vector>
 #define OVERRIDE_NEW 1
