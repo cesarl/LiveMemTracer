@@ -296,7 +296,7 @@ int main(int ac, char **av)
 		}
 
 		LMT_DISPLAY(dt);
-
+		ImGui::ShowTestWindow();
 		ImGui::Render();
 		glfwSwapBuffers(window);
 

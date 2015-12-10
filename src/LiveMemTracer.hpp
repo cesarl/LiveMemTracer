@@ -161,7 +161,8 @@ namespace LiveMemTracer
 		std::vector<Edge*> to;
 		Edge *from;
 		Edge *same;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr) {}
+		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr), lastCount(0) {}
+		int64_t lastCount;
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -276,6 +277,8 @@ namespace LiveMemTracer
 		};
 
 		static bool                                g_filterEmptyAlloc = true;
+		static bool                                g_refeshAuto = true;
+		static bool                                g_refresh = false;
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
@@ -286,7 +289,7 @@ namespace LiveMemTracer
 		static std::vector<Alloc*>                 g_allocMatchs;
 
 		inline bool searchAlloc();
-
+		void displayCaller(Edge *caller);
 		inline void recursiveFilter(LiveMemTracer::Edge *edge, uint8_t depth);
 		//inline void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge);
 		inline void display(float dt);
@@ -782,9 +785,15 @@ namespace LiveMemTracer
 		{
 			if (!caller)
 				return;
+			
+			if (g_refresh)
+			{
+				caller->lastCount = caller->count;
+			}
+
 			ImGui::PushID(caller->alloc);
 			const char *suffix;
-			float size = formatMemoryString(caller->count, suffix);
+			float size = formatMemoryString(caller->lastCount, suffix);
 			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix); ImGui::NextColumn();
 			ImGui::Text("%s", caller->alloc->str); ImGui::NextColumn();
 			if (opened)
@@ -798,24 +807,32 @@ namespace LiveMemTracer
 
 		void render(float dt)
 		{
+			g_refresh = false;
 			bool updateSearch = false;
-			bool updateData = false;
-
 			g_updateRatio += dt;
-
-			if (g_updateRatio >= 1.f)
-			{
-				updateData = true;
-				g_updateRatio = 0.f;
-			}
 
 			if (ImGui::Begin("LiveMemoryProfiler"))
 			{
+				bool refresh = false;
 				ImGui::Checkbox("Filter empty allocs", &g_filterEmptyAlloc); ImGui::SameLine();
+				ImGui::Checkbox("Refresh auto", &g_refeshAuto); ImGui::SameLine();
+				if (!g_refeshAuto)
+				{
+					refresh = ImGui::Button("Refresh");
+					ImGui::SameLine();
+				}
+			
+				if ((g_refeshAuto && g_updateRatio >= 1.f) || refresh)
+				{
+					g_refresh = true;
+					g_updateRatio = 0.f;
+				}
+				ImGui::PushItemWidth(300.f);
 				if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
 				{
 					updateSearch = true;
 				}
+				ImGui::PopItemWidth();
 				ImGui::SameLine();
 				ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 				ImGui::Separator();
@@ -843,14 +860,14 @@ namespace LiveMemTracer
 					{
 						if (!caller->edges)
 							continue;
-						int64_t originalSize = caller->edges->count;
+						int64_t originalSize = caller->edges->lastCount;
 						Edge *edge = caller->edges;
 						while (edge->same)
 						{
-							caller->edges->count += edge->same->count;
+							caller->edges->lastCount += edge->same->lastCount;
 							edge = edge->same;
 						}
-						caller->edges->count = originalSize;
+						caller->edges->lastCount = originalSize;
 						displayCaller(caller->edges);
 						ImGui::Separator();
 					}
