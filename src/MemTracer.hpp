@@ -21,36 +21,6 @@
 
 #ifdef LMT_IMPL
 
-#if !defined(LMT_PLATFORM_WINDOWS) && !defined(LMT_PLATFORM_ORBIS)
-static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
-#endif
-
-#include <atomic>     //std::atomic
-#include <cstdlib>    //malloc etc...
-#include <vector>
-#include <algorithm>
-#include <mutex>
-
-#ifdef LMT_PLATFORM_WINDOWS
-#include <Windows.h>  //CaptureStackBackTrace
-#endif
-
-#endif
-
-
-namespace LiveMemTracer
-{
-
-	inline void *alloc(size_t size);
-	inline void *allocAligned(size_t size, size_t alignment);
-	inline void dealloc(void *ptr);
-	inline void deallocAligned(void *ptr);
-	inline void *realloc(void *ptr, size_t size);
-	void exit();
-	void display(float dt);
-
-#ifdef LMT_IMPL
-
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 8
 #endif
@@ -90,8 +60,34 @@ namespace LiveMemTracer
 #ifndef LMT_IMPLEMENTED
 #define LMT_IMPLEMENTED 1
 #else
-	static_assert(false, "LMT is already implemented, do not define LMT_IMPLEMENTED more than once.");
+static_assert(false, "LMT is already implemented, do not define LMT_IMPLEMENTED more than once.");
 #endif
+
+#if !defined(LMT_PLATFORM_WINDOWS) && !defined(LMT_PLATFORM_ORBIS)
+static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
+#endif
+
+#include <atomic>     //std::atomic
+#include <cstdlib>    //malloc etc...
+#include <vector>
+#include <algorithm>
+#include <mutex>
+
+#endif
+
+
+namespace LiveMemTracer
+{
+
+	inline void *alloc(size_t size);
+	inline void *allocAligned(size_t size, size_t alignment);
+	inline void dealloc(void *ptr);
+	inline void deallocAligned(void *ptr);
+	inline void *realloc(void *ptr, size_t size);
+	void exit();
+	void display(float dt);
+
+#ifdef LMT_IMPL
 
 	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
 	static const size_t STACK_SIZE_PER_ALLOC = LMT_STACK_SIZE_PER_ALLOC;
@@ -102,6 +98,7 @@ namespace LiveMemTracer
 	static const size_t TREE_DICTIONARY_SIZE = LMT_TREE_DICTIONARY_SIZE;
 	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
 	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
+	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 
 	typedef size_t Hash;
 
@@ -131,8 +128,6 @@ namespace LiveMemTracer
 
 	struct AllocStack;
 
-	static void treatChunk(Chunk *chunk);
-	static void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
 
 	static const size_t HEADER_SIZE = sizeof(Header);
 
@@ -264,21 +259,18 @@ namespace LiveMemTracer
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
-	static inline uint32_t getCallstack(size_t maxStackSize, void **stack, LiveMemTracer::Hash *hash);
+	static inline void treatChunk(Chunk *chunk);
+	static inline void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
+	template <class T> inline size_t combineHash(const T& val, size_t baseHash = 14695981039346656037ULL);
 #endif
 }
 
 #ifdef LMT_IMPL
 
 #if defined(LMT_PLATFORM_WINDOWS)
-#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)_aligned_offset_malloc(size, alignment, offset)
-#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)_aligned_free(ptr)
+#include "LiveMemTracer_Windows.hpp"
 #elif defined(LMT_PLATFORM_ORBIS)
-#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)nullptr
-#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)free(ptr)
-#else
-#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)nullptr
-#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)do{}while(0)
+#include "LiveMemTracer_Orbis/LiveMemTracer_Orbis.hpp"
 #endif
 
 void *LiveMemTracer::alloc(size_t size)
@@ -384,208 +376,7 @@ void LiveMemTracer::exit()
 
 
 //////////////////////////////////////////////////////////////////////////
-
-#if defined(LMT_PLATFORM_WINDOWS)
-#include "imagehlp.h"
-#pragma comment(lib, "imagehlp.lib")
-#elif defined(LMT_PLATFORM_ORBIS)
-#endif
-
-namespace SymbolGetter
-{
-	static int _initialized = 0;
-	static inline void init()
-	{
-#ifdef LMT_PLATFORM_WINDOWS
-		if (_initialized == false)
-		{
-			HANDLE hProcess;
-
-			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-
-			hProcess = GetCurrentProcess();
-			if (!SymInitialize(hProcess, NULL, TRUE))
-			{
-				LMT_ASSERT(false, "SymInitialize failed.");
-			}
-			_initialized = true;
-		}
-#endif
-	}
-
-	static const char *g_truncated = "Truncated\0";
-
-	static inline const char *getSymbol(void *ptr, void *& absoluteAddress)
-#if defined(LMT_PLATFORM_WINDOWS)
-	{
-		init();
-
-		DWORD64 dwDisplacement = 0;
-		DWORD64 dwAddress = DWORD64(ptr);
-		HANDLE hProcess = GetCurrentProcess();
-
-		char pSymbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
-		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)pSymbolBuffer;
-
-		pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-		pSymbol->MaxNameLen = MAX_SYM_NAME;
-
-		if (size_t(ptr) == size_t(-1) || !SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
-		{
-			return g_truncated;
-		}
-		absoluteAddress = (void*)(DWORD64(ptr) - dwDisplacement);
-		return _strdup(pSymbol->Name);
-	}
-#elif defined(LMT_PLATFORM_ORBIS)
-	{
-		if (size_t(ptr) == size_t(-1))
-		{
-			return g_truncated;
-		}
-	}
-#else
-	{
-		static_assert(false, "Not other platform implemented than Orbis and Windows");
-		return nullptr;
-	}
-#endif
-};
-
-template <class T>
-inline size_t combineHash(const T& val, size_t baseHash = 14695981039346656037ULL)
-{
-	const uint8_t* bytes = (uint8_t*)&val;
-	const size_t count = sizeof(val);
-	const size_t FNV_offset_basis = baseHash;
-	const size_t FNV_prime = 1099511628211ULL;
-
-	size_t hash = FNV_offset_basis;
-	for (size_t i = 0; i < count; ++i)
-	{
-		hash ^= (size_t)bytes[i];
-		hash *= FNV_prime;
-	}
-
-	return hash;
-}
-
-void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkTree)
-{
-	int stackSize = allocStack.stackSize;
-	stackSize -= 2;
-	uint8_t depth = 0;
-	Edge *previousPtr = nullptr;
-	while (stackSize >= 0)
-	{
-		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
-		currentHash = combineHash((size_t(previousPtr)), currentHash);
-		currentHash = combineHash(depth * depth, currentHash);
-
-		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
-		currentPtr->count += size;
-		if (checkTree)
-		{
-			currentPtr->name = allocStack.stackAllocs[stackSize]->str;
-			if (previousPtr != nullptr)
-			{
-				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
-				if (it == std::end(previousPtr->to))
-				{
-					previousPtr->to.push_back(currentPtr);
-				}
-				currentPtr->from = previousPtr;
-			}
-			else
-			{
-				auto it = find(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr);
-				if (it == std::end(g_allocStackRoots))
-					g_allocStackRoots.push_back(currentPtr);
-			}
-		}
-		if (strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) != 0)
-		{
-			int toto = 12;
-		}
-		if (previousPtr && previousPtr->count >= 0 && previousPtr->count < currentPtr->count)
-		{
-			int fuckMe = 123;
-		}
-		previousPtr = currentPtr;
-		++depth;
-		--stackSize;
-	}
-}
-
-void LiveMemTracer::treatChunk(Chunk *chunk)
-{
-	std::lock_guard<std::mutex> lock(g_mutex);
-	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
-	{
-		auto size = chunk->allocSize[i];
-		if (size == 0)
-			continue;
-		auto it = g_allocStackRefTable.update(chunk->allocHash[i]);
-		auto &allocStack = it->getValue();
-		if (allocStack.stackSize != 0)
-		{
-			allocStack.counter += size;
-			updateTree(allocStack, size, false);
-			for (size_t j = 0; j < allocStack.stackSize; ++j)
-			{
-				allocStack.stackAllocs[j]->counter += size;
-			}
-			continue;
-		}
-		allocStack.counter = size;
-		allocStack.hash = chunk->allocHash[i];
-
-		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
-		{
-			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
-			auto found = g_allocRefTable.update(size_t(addr));
-			if (found->getValue().shared != nullptr)
-			{
-				auto shared = found->getValue().shared;
-				shared->counter += size;
-				allocStack.stackAllocs[j] = shared;
-				continue;
-			}
-			if (found->getValue().str != nullptr)
-			{
-				allocStack.stackAllocs[j] = &found->getValue();
-				found->getValue().counter += size;
-				continue;
-			}
-			void *absoluteAddress = nullptr;
-			const char *name = SymbolGetter::getSymbol(addr, absoluteAddress);
-
-			auto shared = g_allocRefTable.update(size_t(absoluteAddress));
-			if (shared->getValue().str != nullptr)
-			{
-				found->getValue().shared = &shared->getValue();
-				allocStack.stackAllocs[j] = &shared->getValue();
-				shared->getValue().counter += size;
-				if (name != SymbolGetter::g_truncated)
-					free((void*)name);
-				continue;
-			}
-
-			found->getValue().shared = &shared->getValue();
-			shared->getValue().str = name;
-			shared->getValue().counter = size;
-			allocStack.stackAllocs[j] = &shared->getValue();
-			shared->getValue().next = g_allocList;
-			g_allocList = &shared->getValue();
-		}
-		allocStack.stackSize = chunk->allocStackSize[i];
-		updateTree(allocStack, size, true);
-	}
-
-	chunk->treated.store(ChunkStatus::TREATED);
-}
-
-
+// IMPL ONLY : 
 //////////////////////////////////////////////////////////////////////////
 
 LiveMemTracer::Chunk *LiveMemTracer::getChunk()
@@ -666,57 +457,6 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 	return uint8_t(-1);
 }
 
-uint32_t LiveMemTracer::getCallstack(size_t maxStackSize, void **stack, Hash *hash)
-#if defined(LMT_PLATFORM_WINDOWS)
-{
-	uint32_t count = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, maxStackSize, stack, (PDWORD)hash);
-
-	if (count == maxStackSize)
-	{
-		void* tmpStack[INTERNAL_MAX_STACK_DEPTH];
-		uint32_t tmpSize = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, INTERNAL_MAX_STACK_DEPTH, tmpStack, (PDWORD)hash);
-
-		for (uint32_t i = 0; i < maxStackSize - 1; i++)
-			stack[maxStackSize - 1 - i] = tmpStack[tmpSize - 1 - i];
-		stack[0] = (void*)~0;
-	}
-	return count;
-}
-#elif defined(LMT_PLATFORM_ORBIS)
-{
-	const uintptr_t *fp = (const uintptr_t*)__builtin_frame_address(0);
-	int depth = -INTERNAL_FRAME_TO_SKIP;
-	*hash = 0;
-	void* tmpStack[INTERNAL_MAX_STACK_DEPTH];
-	while (fp && depth < INTERNAL_MAX_STACK_DEPTH)
-	{
-		const uintptr_t parent = fp[0];
-		const uintptr_t returnAddr = fp[1];
-
-		if (depth >= 0)
-		{
-			tmpStack[depth] = (void*)returnAddr;
-			*hash = combineHash(Hash(returnAddr), *hash);
-		}
-
-		++depth;
-		fp = (uintptr_t*)parent;
-	}
-	int mss = depth >= maxStackSize ? maxStackSize - 1 : depth;
-	uint32_t i = 0;
-	for (; i < mss; i++)
-		stack[mss - i] = tmpStack[depth - i];
-	if (depth >= maxStackSize)
-		stack[0] = (void*)~0;
-	return i;
-}
-#else
-{
-	static_assert(false, "Not other platform implemented than Orbis and Windows");
-	return -1;
-}
-#endif
-
 void LiveMemTracer::logAllocInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::Header *header, size_t size)
 {
 	Hash hash;
@@ -763,6 +503,139 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Chunk *chunk, LiveMemTracer::H
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
+}
+
+void LiveMemTracer::treatChunk(Chunk *chunk)
+{
+	std::lock_guard<std::mutex> lock(g_mutex);
+	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
+	{
+		auto size = chunk->allocSize[i];
+		if (size == 0)
+			continue;
+		auto it = g_allocStackRefTable.update(chunk->allocHash[i]);
+		auto &allocStack = it->getValue();
+		if (allocStack.stackSize != 0)
+		{
+			allocStack.counter += size;
+			updateTree(allocStack, size, false);
+			for (size_t j = 0; j < allocStack.stackSize; ++j)
+			{
+				allocStack.stackAllocs[j]->counter += size;
+			}
+			continue;
+		}
+		allocStack.counter = size;
+		allocStack.hash = chunk->allocHash[i];
+
+		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
+		{
+			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
+			auto found = g_allocRefTable.update(size_t(addr));
+			if (found->getValue().shared != nullptr)
+			{
+				auto shared = found->getValue().shared;
+				shared->counter += size;
+				allocStack.stackAllocs[j] = shared;
+				continue;
+			}
+			if (found->getValue().str != nullptr)
+			{
+				allocStack.stackAllocs[j] = &found->getValue();
+				found->getValue().counter += size;
+				continue;
+			}
+			void *absoluteAddress = nullptr;
+			const char *name = SymbolGetter::getSymbol(addr, absoluteAddress);
+
+			auto shared = g_allocRefTable.update(size_t(absoluteAddress));
+			if (shared->getValue().str != nullptr)
+			{
+				found->getValue().shared = &shared->getValue();
+				allocStack.stackAllocs[j] = &shared->getValue();
+				shared->getValue().counter += size;
+				if (name != TRUNCATED_STACK_NAME)
+					free((void*)name);
+				continue;
+			}
+
+			found->getValue().shared = &shared->getValue();
+			shared->getValue().str = name;
+			shared->getValue().counter = size;
+			allocStack.stackAllocs[j] = &shared->getValue();
+			shared->getValue().next = g_allocList;
+			g_allocList = &shared->getValue();
+		}
+		allocStack.stackSize = chunk->allocStackSize[i];
+		updateTree(allocStack, size, true);
+	}
+
+	chunk->treated.store(ChunkStatus::TREATED);
+}
+
+void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkTree)
+{
+	int stackSize = allocStack.stackSize;
+	stackSize -= 2;
+	uint8_t depth = 0;
+	Edge *previousPtr = nullptr;
+	while (stackSize >= 0)
+	{
+		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
+		currentHash = combineHash((size_t(previousPtr)), currentHash);
+		currentHash = combineHash(depth * depth, currentHash);
+
+		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
+		currentPtr->count += size;
+		if (checkTree)
+		{
+			currentPtr->name = allocStack.stackAllocs[stackSize]->str;
+			if (previousPtr != nullptr)
+			{
+				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
+				if (it == std::end(previousPtr->to))
+				{
+					previousPtr->to.push_back(currentPtr);
+				}
+				currentPtr->from = previousPtr;
+			}
+			else
+			{
+				auto it = find(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr);
+				if (it == std::end(g_allocStackRoots))
+					g_allocStackRoots.push_back(currentPtr);
+			}
+		}
+		if (strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) != 0)
+		{
+			int toto = 12;
+		}
+		if (previousPtr && previousPtr->count >= 0 && previousPtr->count < currentPtr->count)
+		{
+			int fuckMe = 123;
+		}
+		previousPtr = currentPtr;
+		++depth;
+		--stackSize;
+	}
+}
+
+template <class T>
+inline size_t LiveMemTracer::combineHash(const T& val, size_t baseHash)
+{
+	const uint8_t* bytes = (uint8_t*)&val;
+	const size_t count = sizeof(val);
+	const size_t FNV_offset_basis = baseHash;
+	const size_t FNV_prime = 1099511628211ULL;
+
+	size_t hash = FNV_offset_basis;
+	for (size_t i = 0; i < count; ++i)
+	{
+		hash ^= (size_t)bytes[i];
+		hash *= FNV_prime;
+	}
+
+	return hash;
 }
 
 #ifdef LMT_IMGUI
