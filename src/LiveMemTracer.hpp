@@ -682,6 +682,30 @@ namespace LiveMemTracer
 {
 	namespace Renderer
 	{
+		float formatMemoryString(int64_t sizeInBytes, const char *&str)
+		{
+			if (sizeInBytes < 0)
+			{
+				str = "b";
+				return float(sizeInBytes);
+			}
+			if (sizeInBytes < 10 * 1024)
+			{
+				str = "b";
+				return float(sizeInBytes);
+			}
+			else if (sizeInBytes < 10 * 1024 * 1024)
+			{
+				str = "Kb";
+				return sizeInBytes / 1024.f;
+			}
+			else
+			{
+				str = "Mb";
+				return sizeInBytes / 1024 / 1024.f;
+			}
+		}
+
 		bool searchAlloc()
 		{
 			g_allocMatchs.clear();
@@ -758,14 +782,18 @@ namespace LiveMemTracer
 		{
 			if (!caller)
 				return;
-			const bool opened = ImGui::TreeNode(caller, "%i", caller->count); ImGui::NextColumn();
+			ImGui::PushID(caller->alloc);
+			const char *suffix;
+			float size = formatMemoryString(caller->count, suffix);
+			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix); ImGui::NextColumn();
 			ImGui::Text("%s", caller->alloc->str); ImGui::NextColumn();
 			if (opened)
 			{
 				for (auto &to : caller->to)
-				displayCaller(to);
+					displayCaller(to);
 				ImGui::TreePop();
 			}
+			ImGui::PopID();
 		}
 
 		void render(float dt)
@@ -813,12 +841,17 @@ namespace LiveMemTracer
 
 					for (auto &caller : g_allocMatchs)
 					{
+						if (!caller->edges)
+							continue;
+						int64_t originalSize = caller->edges->count;
 						Edge *edge = caller->edges;
-						while (edge)
+						while (edge->same)
 						{
-							displayCaller(caller->edges);
+							caller->edges->count += edge->same->count;
 							edge = edge->same;
 						}
+						caller->edges->count = originalSize;
+						displayCaller(caller->edges);
 						ImGui::Separator();
 					}
 				}
