@@ -157,11 +157,11 @@ namespace LiveMemTracer
 	struct Edge
 	{
 		int64_t count;
-		const char *name;
+		Alloc *alloc;
 		std::vector<Edge*> to;
 		Edge *from;
 		Edge *same;
-		Edge() : count(0), name(nullptr), from(nullptr), same(nullptr) {}
+		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr) {}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -258,6 +258,39 @@ namespace LiveMemTracer
 #elif defined(LMT_PLATFORM_ORBIS)
 	{g_internalSharedMemoryUsed};
 #endif
+
+	namespace Renderer
+	{
+		struct Match
+		{
+			Edge                 *edge;
+			uint8_t              depth;
+			size_t               next;
+			Match() : edge(nullptr), depth(0), next(-1) {}
+		};
+
+		enum DisplayType
+		{
+			CALLER,
+			CALLEE
+		};
+
+		static bool                                g_filterEmptyAlloc = true;
+		static float                               g_updateRatio = 0.f;
+		static const size_t                        g_search_str_length = 1024;
+		static char                                g_searchStr[g_search_str_length];
+		static std::vector<Match>                  g_matchs;
+		static std::vector<Match>                  g_pool;
+		static DisplayType                         g_displayType = CALLER;
+
+		static std::vector<Alloc*>                 g_allocMatchs;
+
+		inline bool searchAlloc();
+
+		inline void recursiveFilter(LiveMemTracer::Edge *edge, uint8_t depth);
+		//inline void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge);
+		inline void display(float dt);
+	}
 
 	static inline Chunk *getChunk();
 	static inline bool chunkIsFull(const Chunk *chunk);
@@ -592,10 +625,10 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 		currentPtr->count += size;
 		if (checkTree)
 		{
-			if (!currentPtr->name)
+			if (!currentPtr->alloc)
 			{
 				LMT_DEBUG_ASSERT(currentPtr->same == nullptr, "Edge already have a same pointer defined.");
-				currentPtr->name = allocStack.stackAllocs[stackSize]->str;
+				currentPtr->alloc = allocStack.stackAllocs[stackSize];
 				currentPtr->same = allocStack.stackAllocs[stackSize]->edges;
 				allocStack.stackAllocs[stackSize]->edges = currentPtr;
 			}
@@ -616,7 +649,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 					g_allocStackRoots.push_back(currentPtr);
 			}
 		}
-		LMT_DEBUG_ASSERT(strcmp(currentPtr->name, allocStack.stackAllocs[stackSize]->str) == 0, "Name collision.");
+		LMT_DEBUG_ASSERT(strcmp(currentPtr->alloc->str, allocStack.stackAllocs[stackSize]->str) == 0, "Name collision.");
 
 		previousPtr = currentPtr;
 		++depth;
@@ -645,194 +678,239 @@ inline size_t LiveMemTracer::combineHash(const T& val, size_t baseHash)
 #ifdef LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
-struct Match
+namespace LiveMemTracer
 {
-	LiveMemTracer::Edge* edge;
-	uint8_t              depth;
-	size_t               next = -1;
-};
-
-static void recursiveFilter(LiveMemTracer::Edge *edge, std::vector<Match> &matchs, std::vector<Match> &pool, const char *search, uint8_t depth)
-{
-	++depth;
-	for (auto &e : edge->to)
+	namespace Renderer
 	{
-		if (strstr(e->name, search) != nullptr)
+		bool searchAlloc()
 		{
-			matchs.resize(matchs.size() + 1);
-			Match *match = &matchs.back();
-			match->depth = depth;
-			match->edge = e;
-			auto ec = e;
-			size_t index = pool.size();
-			pool.resize(pool.size() + depth + 1);
-			while (ec != nullptr)
+			g_allocMatchs.clear();
+			Alloc *alloc = g_allocList;
+
+			while (alloc != nullptr)
 			{
-				match->next = index;
-				match = &pool[index];
-				match->edge = ec->from;
-				match->depth = depth - size_t(index);
-				ec = ec->from;
-				++index;
+				if (strstr(alloc->str, g_searchStr) != nullptr)
+				{
+					g_allocMatchs.push_back(alloc);
+				}
+				alloc = alloc->next;
+			}
+			return g_allocMatchs.empty() == false;
+		}
+
+		void recursiveFilter(Edge *edge, uint8_t depth)
+		{
+			++depth;
+			for (auto &e : edge->to)
+			{
+				if (strstr(e->alloc->str, g_searchStr) != nullptr)
+				{
+					g_matchs.resize(g_matchs.size() + 1);
+					Match *match = &g_matchs.back();
+					match->depth = depth;
+					match->edge = e;
+					auto ec = e;
+					size_t index = g_pool.size();
+					g_pool.resize(g_pool.size() + depth + 1);
+					while (ec != nullptr)
+					{
+						match->next = index;
+						match = &g_pool[index];
+						match->edge = ec->from;
+						match->depth = depth - size_t(index);
+						ec = ec->from;
+						++index;
+					}
+				}
+				recursiveFilter(e, depth);
 			}
 		}
-		recursiveFilter(e, matchs, pool, search, depth);
-	}
-}
 
-static bool edgeSortFunction(LiveMemTracer::Edge *a, LiveMemTracer::Edge *b) { return (a->count > b->count); }
+		inline bool edgeSortFunction(Edge *a, Edge *b) { return (a->count > b->count); }
 
-static void recursiveImguiTreeDisplay(LiveMemTracer::Edge *edge, bool updateData, bool filter)
-{
-	if (filter == false || edge->count)
-	{
-		int64_t count = edge->count;
-		if (count < 10 * 1024)
-			ImGui::Text("%06f b", float(count));
-		else if (count <= 10 * 1024 * 1024)
-			ImGui::Text("%06f K", float(count) / 1024.f);
-		else
+		//void recursiveImguiTreeDisplay(Edge *edge)
+		//{
+		//	if (g_filterEmptyAlloc == false || edge->count)
+		//	{
+		//		int64_t count = edge->count;
+		//		if (count < 10 * 1024)
+		//			ImGui::Text("%06f b", float(count));
+		//		else if (count <= 10 * 1024 * 1024)
+		//			ImGui::Text("%06f K", float(count) / 1024.f);
+		//		else
+		//		{
+		//			ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
+		//		}
+		//		ImGui::SameLine();
+		//		if (ImGui::TreeNode((void*)edge, edge->name))
+		//		{
+		//			//std::sort(std::begin(edge->to), std::end(edge->to), &edgeSortFunction);
+		//			for (size_t i = 0; i < edge->to.size(); ++i)
+		//			{
+		//				recursiveImguiTreeDisplay(edge->to[i]);
+		//			}
+		//			ImGui::TreePop();
+		//		}
+		//	}
+		//}
+
+		void displayCaller(Edge *caller)
 		{
-			ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
-		}
-		ImGui::SameLine();
-		if (ImGui::TreeNode((void*)edge, edge->name))
-		{
-			if (updateData)
-				std::sort(std::begin(edge->to), std::end(edge->to), &edgeSortFunction);
-			for (size_t i = 0; i < edge->to.size(); ++i)
+			if (!caller)
+				return;
+			const bool opened = ImGui::TreeNode(caller, "%i", caller->count); ImGui::NextColumn();
+			ImGui::Text("%s", caller->alloc->str); ImGui::NextColumn();
+			if (opened)
 			{
-				recursiveImguiTreeDisplay(edge->to[i], updateData, filter);
+				for (auto &to : caller->to)
+				displayCaller(to);
+				ImGui::TreePop();
 			}
-			ImGui::TreePop();
+		}
+
+		void render(float dt)
+		{
+			bool updateSearch = false;
+			bool updateData = false;
+
+			g_updateRatio += dt;
+
+			if (g_updateRatio >= 1.f)
+			{
+				updateData = true;
+				g_updateRatio = 0.f;
+			}
+
+			if (ImGui::Begin("LiveMemoryProfiler"))
+			{
+				ImGui::Checkbox("Filter empty allocs", &g_filterEmptyAlloc); ImGui::SameLine();
+				if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
+				{
+					updateSearch = true;
+				}
+				ImGui::SameLine();
+				ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+				ImGui::Separator();
+
+				std::lock_guard<std::mutex> lock(g_mutex);
+
+				if (updateSearch)
+				{
+					g_matchs.clear(); g_pool.clear();
+					if (strlen(g_searchStr) > 0)
+					{
+						searchAlloc();
+					}
+				}
+
+				if (g_displayType == CALLER)
+				{
+					ImGui::Columns(2, "Callers columns");
+					ImGui::Separator();
+					ImGui::Text("Size"); ImGui::NextColumn();
+					ImGui::Text("Caller"); ImGui::NextColumn();
+					ImGui::Separator();
+
+					for (auto &caller : g_allocMatchs)
+					{
+						Edge *edge = caller->edges;
+						while (edge)
+						{
+							displayCaller(caller->edges);
+							edge = edge->same;
+						}
+						ImGui::Separator();
+					}
+				}
+
+				//if (g_matchs.size())
+				//{
+				//	static size_t elemPerPage = 50;
+				//	static size_t currentPage = 0;
+
+				//	if (ImGui::Button("Prev page") && currentPage > 0)
+				//	{
+				//		--currentPage;
+				//	}
+				//	ImGui::SameLine();
+				//	if (ImGui::Button("Next page"))
+				//	{
+				//		++currentPage;
+				//	}
+
+				//	if (g_matchs.size() < currentPage * elemPerPage)
+				//	{
+				//		currentPage = 0;
+				//	}
+
+
+				//	ImGui::Columns(2);
+				//	ImGui::Text("Size");
+				//	ImGui::NextColumn();
+				//	ImGui::Text("Stack");
+				//	ImGui::NextColumn();
+				//	ImGui::Separator();
+				//	ImGui::Columns(1);
+
+				//	size_t elemCounter = currentPage * elemPerPage;
+				//	size_t elemCounterMax = (currentPage + 1) * elemPerPage >= g_matchs.size() ? g_matchs.size() : (currentPage + 1) * elemPerPage;
+				//	for (; elemCounter < elemCounterMax; ++elemCounter)
+				//	{
+				//		size_t opened = 0;
+				//		Match *match = &g_matchs[elemCounter];
+				//		while (match && match->edge)
+				//		{
+				//			if (ImGui::TreeNode(match->edge, match->edge->name))
+				//			{
+				//				ImGui::SameLine();
+				//				int64_t count = match->edge->count;
+				//				if (count < 10 * 1024)
+				//					ImGui::Text("%06f b", float(count));
+				//				else if (count <= 10 * 1024 * 1024)
+				//					ImGui::Text("%06f K", float(count) / 1024.f);
+				//				else
+				//					ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
+				//				++opened;
+				//				if (match->next == -1)
+				//					break;
+				//				match = &g_pool[match->next];
+				//				continue;
+				//			}
+				//			break;
+				//		}
+				//		while (0 < opened--)
+				//		{
+				//			ImGui::TreePop();
+				//		}
+				//	}
+				//}
+				//else
+				//{
+				//	if (updateData)
+				//	{
+				//		std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
+				//	}
+				//	ImGui::Columns(2);
+				//	ImGui::Text("Size");
+				//	ImGui::NextColumn();
+				//	ImGui::Text("Stack");
+				//	ImGui::NextColumn();
+				//	ImGui::Separator();
+				//	ImGui::Columns(1);
+				//	for (auto &e : g_allocStackRoots)
+				//	{
+				//		recursiveImguiTreeDisplay(e);
+				//	}
+				//}
+			}
+			ImGui::End();
 		}
 	}
 }
 
 void LiveMemTracer::display(float dt)
 {
-	static bool filterEmptyAlloc = true;
-	static float updateRatio = 0.f;
-	static const size_t SEARCH_STR_LENGTH = 1024;
-	static char searchStr[SEARCH_STR_LENGTH];
-	bool updateSearch = false;
-
-	bool updateData = false;
-	updateRatio += dt;
-	if (updateRatio >= 1.f)
-	{
-		updateData = true;
-		updateRatio = 0.f;
-	}
-
-	if (ImGui::Begin("LiveMemoryProfiler"))
-	{
-		ImGui::Checkbox("Filter empty allocs", &filterEmptyAlloc); ImGui::SameLine();
-		if (ImGui::InputText("Search", searchStr, SEARCH_STR_LENGTH))
-		{
-			updateSearch = true;
-		}
-		ImGui::SameLine();
-		ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
-		ImGui::Separator();
-
-		std::lock_guard<std::mutex> lock(g_mutex);
-
-		static std::vector<Match> matchs; static std::vector<Match> pool;
-
-		if (updateSearch)
-		{
-			matchs.clear(); pool.clear();
-			if (strlen(searchStr) > 0)
-			{
-				for (auto &e : g_allocStackRoots)
-				{
-					recursiveFilter(e, matchs, pool, searchStr, 0);
-				}
-			}
-		}
-
-		if (matchs.size())
-		{
-			static size_t elemPerPage = 50;
-			static size_t currentPage = 0;
-
-			if (ImGui::Button("Prev page") && currentPage > 0)
-			{
-				--currentPage;
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Next page"))
-			{
-				++currentPage;
-			}
-
-			if (matchs.size() < currentPage * elemPerPage)
-			{
-				currentPage = 0;
-			}
-
-
-			ImGui::Columns(2);
-			ImGui::Text("Size");
-			ImGui::NextColumn();
-			ImGui::Text("Stack");
-			ImGui::NextColumn();
-			ImGui::Separator();
-			ImGui::Columns(1);
-
-			size_t elemCounter = currentPage * elemPerPage;
-			size_t elemCounterMax = (currentPage + 1) * elemPerPage >= matchs.size() ? matchs.size() : (currentPage + 1) * elemPerPage;
-			for (; elemCounter < elemCounterMax; ++elemCounter)
-			{
-				size_t opened = 0;
-				Match *match = &matchs[elemCounter];
-				while (match && match->edge)
-				{
-					if (ImGui::TreeNode(match->edge, match->edge->name))
-					{
-						ImGui::SameLine();
-						int64_t count = match->edge->count;
-						if (count < 10 * 1024)
-							ImGui::Text("%06f b", float(count));
-						else if (count <= 10 * 1024 * 1024)
-							ImGui::Text("%06f K", float(count) / 1024.f);
-						else
-							ImGui::Text("%06f Mo", float(count) / 1024.f / 1024.f);
-						++opened;
-						if (match->next == -1)
-							break;
-						match = &pool[match->next];
-						continue;
-					}
-					break;
-				}
-				while (0 < opened--)
-				{
-					ImGui::TreePop();
-				}
-			}
-		}
-		else
-		{
-			if (updateData)
-			{
-				std::sort(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), edgeSortFunction);
-			}
-			ImGui::Columns(2);
-			ImGui::Text("Size");
-			ImGui::NextColumn();
-			ImGui::Text("Stack");
-			ImGui::NextColumn();
-			ImGui::Separator();
-			ImGui::Columns(1);
-			for (auto &e : g_allocStackRoots)
-			{
-				recursiveImguiTreeDisplay(e, updateData, filterEmptyAlloc);
-			}
-		}
-	}
-	ImGui::End();
+	Renderer::render(dt);
 }
 #else
 void LiveMemTracer::display(float dt) {}

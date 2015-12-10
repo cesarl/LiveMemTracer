@@ -31,84 +31,99 @@ static void error_callback(int error, const char* description)
 
 #ifdef OVERRIDE_NEW
 //////////////////////////////////////////////////////////////////////////
+void *myMalloc(size_t size)
+{
+	return LMT_ALLOC(size);
+}
+
+void myFree(void *ptr)
+{
+	return LMT_DEALLOC(ptr);
+}
+
+void *myRealloc(void *ptr, size_t size)
+{
+	return LMT_REALLOC(ptr, size);
+}
+
 void* operator new(size_t count) throw(std::bad_alloc)
 {
-	return LMT_ALLOC(count);
+	return myMalloc(count);
 }
 
 void* operator new(size_t count, const std::nothrow_t&) throw()
 {
-	return LMT_ALLOC(count);
+	return myMalloc(count);
 }
 
 void* operator new(size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return LMT_ALLOC_ALIGNED(count, alignment);
+	return myMalloc(count);
 }
 
 void* operator new(size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LMT_ALLOC_ALIGNED(count, alignment);
+	return myMalloc(count);
 }
 
 void* operator new[](size_t count) throw(std::bad_alloc)
 {
-	return LMT_ALLOC(count);
+	return myMalloc(count);
 }
 
 void* operator new[](size_t count, const std::nothrow_t&) throw()
 {
-	return LMT_ALLOC(count);
+	return myMalloc(count);
 }
 
 void* operator new[](size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return LMT_ALLOC_ALIGNED(count, alignment);
+	return myMalloc(count);
 }
 
 void* operator new[](size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LMT_ALLOC_ALIGNED(count, alignment);
+	return myMalloc(count);
 }
 
 void operator delete(void* ptr) throw()
 {
-	return LMT_DEALLOC(ptr);
+	return myFree(ptr);
 }
 
 void operator delete(void *ptr, const std::nothrow_t&) throw()
 {
-	return LMT_DEALLOC(ptr);
+	return myFree(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment) throw()
 {
-	return LMT_DEALLOC_ALIGNED(ptr);
+	return myFree(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LMT_DEALLOC_ALIGNED(ptr);
+	return myFree(ptr);
 }
 
 void operator delete[](void* ptr) throw()
 {
-	return LMT_DEALLOC(ptr);
+	return myFree(ptr);
 }
 
 void operator delete[](void *ptr, const std::nothrow_t&) throw()
 {
-	return LMT_DEALLOC(ptr);
+	return myFree(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment) throw()
 {
-	return LMT_DEALLOC_ALIGNED(ptr);
+	return myFree(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return LMT_DEALLOC_ALIGNED(ptr);
+	return myFree(ptr);
 }
 //////////////////////////////////////////////////////////////////////////
 #endif
@@ -148,10 +163,40 @@ struct FooBarFunctor
 	}
 };
 
+struct Titi
+{
+	char titi[256];
+};
+
+Titi *leftTiti() { return new Titi; }
+Titi *rightTiti() { return new Titi; }
+
+Titi *conditionalTiti(bool left)
+{
+	if (left)
+		return leftTiti();
+	else
+		return rightTiti();
+}
 
 struct Tata
 {
 	char tata[1024];
+	Titi *a;
+	Titi *b;
+	void *v;
+	Tata()
+	{
+		a = conditionalTiti(true);
+		b = conditionalTiti(false);
+		v = myMalloc(12);
+	}
+	~Tata()
+	{
+		myFree(v);
+		delete a;
+		delete b;
+	}
 };
 
 struct Toto
@@ -171,6 +216,11 @@ struct Toto
 	}
 };
 
+void smallLeak()
+{
+	auto t = new Titi();
+}
+
 #include <chrono>
 #include <iostream>
 
@@ -189,8 +239,12 @@ int main(int ac, char **av)
 
 	// Setup ImGui binding
 	ImGui_ImplGlfwGL3_Init(window, true);
+	ImGui::GetIO().MemAllocFn = &LiveMemTracer::alloc;
+	ImGui::GetIO().MemFreeFn = &LiveMemTracer::dealloc;
 
 	ImVec4 clear_color = ImColor(114, 144, 154);
+
+	smallLeak();
 
 	// Main loop
 	float dt = 0.0f;
@@ -226,7 +280,10 @@ int main(int ac, char **av)
 
 		for (int i = 0; i < 100; ++i)
 		{
-			totoVector.push_back(new Toto());
+			auto lambda = [&](){
+				totoVector.push_back(new Toto());
+			};
+			lambda();
 		}
 		if (++clearCounter == 100)
 		{
