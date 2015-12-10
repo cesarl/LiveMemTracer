@@ -291,7 +291,7 @@ namespace LiveMemTracer
 		static std::vector<Alloc*>                 g_allocMatchs;
 
 		inline bool searchAlloc();
-		void displayCaller(Edge *caller);
+		void displayCaller(Edge *caller, int depth);
 		inline void updateHistograms();
 		inline void createHistogram(Alloc *alloc);
 		inline void display(float dt);
@@ -727,7 +727,7 @@ namespace LiveMemTracer
 			return g_allocMatchs.empty() == false;
 		}
 
-		void displayCaller(Edge *caller)
+		void displayCaller(Edge *caller, int depth)
 		{
 			if (!caller)
 				return;
@@ -740,11 +740,22 @@ namespace LiveMemTracer
 			ImGui::PushID(caller->alloc);
 			const char *suffix;
 			float size = formatMemoryString(caller->lastCount, suffix);
-			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix); ImGui::NextColumn();
-			ImGui::Text("%s", caller->alloc->str); ImGui::NextColumn();
+			auto cursorPos = ImGui::GetCursorPos();
+			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix);
+			cursorPos.x += 150;
+			ImGui::SetCursorPos(cursorPos);
+			ImGui::Text("%s", caller->alloc->str);
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip(caller->alloc->str);
+			}
 			if (ImGui::BeginPopupContextItem("Options"))
 			{
 				if (ImGui::Selectable("Watch"))
+				{
+					createHistogram(caller->alloc);
+				}
+				if (ImGui::Selectable("Show callers"))
 				{
 					createHistogram(caller->alloc);
 				}
@@ -753,7 +764,7 @@ namespace LiveMemTracer
 			if (opened)
 			{
 				for (auto &to : caller->to)
-					displayCaller(to);
+					displayCaller(to, depth + 1);
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
@@ -846,7 +857,7 @@ namespace LiveMemTracer
 					ImGui::Text("Size"); ImGui::NextColumn();
 					ImGui::Text("Caller"); ImGui::NextColumn();
 					ImGui::Separator();
-
+					ImGui::Columns(1);
 					for (auto &caller : g_allocMatchs)
 					{
 						if (!caller->edges)
@@ -859,7 +870,7 @@ namespace LiveMemTracer
 							edge = edge->same;
 						}
 						caller->edges->lastCount = originalSize;
-						displayCaller(caller->edges);
+						displayCaller(caller->edges, 0);
 						ImGui::Separator();
 					}
 				}
