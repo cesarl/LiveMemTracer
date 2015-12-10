@@ -35,9 +35,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\MemTracer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="External\imgui\imgui_impl_glfw_gl3.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -45,6 +42,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="External\GL\glcorearb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\LiveMemTracer.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
