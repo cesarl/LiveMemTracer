@@ -1,3 +1,57 @@
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+class WorkerThread
+{
+public:
+	WorkerThread()
+	{
+		for (int i = 0; i < 4; ++i)
+		{
+			_threads[i] = std::thread([this](){
+				while (_exit == false)
+				{
+					std::unique_lock<std::mutex> lock(_mutex);
+					_cond.wait(lock);
+					if (_exit)
+						return;
+					auto &task = _queue.back();
+					task();
+					_queue.pop();
+				}
+			});
+		}
+	}
+
+	void push(std::function<void()> fn)
+	{
+		std::lock_guard<std::mutex> lock(_mutex);
+		_queue.push(fn);
+		_cond.notify_one();
+	}
+
+	void exit()
+	{
+		_exit = true;
+		push([](){});
+		_cond.notify_all();
+		for (int i = 0; i < 4; ++i)
+		{
+			_threads[i].join();
+		}
+	}
+private:
+	std::mutex _mutex;
+	std::queue<std::function<void()>> _queue;
+	std::condition_variable _cond;
+	std::thread _threads[4];
+	bool _exit = false;
+};
+
+ WorkerThread g_workerThread;
+
 #define LMT_ENABLED 1
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
@@ -6,7 +60,7 @@
 #define LMT_PLATFORM_WINDOWS 1
 #define LMT_DEBUG_DEV 1
 
-#define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk);
+#define LMT_TREAT_CHUNK(chunk) g_workerThread.push([=](){ LiveMemTracer::treatChunk(chunk); })
 
 #define LMT_IMPL 1
 #define LMT_IMGUI 1
@@ -309,5 +363,6 @@ int main(int ac, char **av)
 	ImGui_ImplGlfwGL3_Shutdown();
 	glfwTerminate();
 	LMT_EXIT();
+	g_workerThread.exit();
 	return 0;
 }

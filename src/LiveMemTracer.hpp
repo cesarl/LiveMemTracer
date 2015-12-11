@@ -121,7 +121,7 @@ namespace LiveMemTracer
 		TREATED = 0,
 		PENDING
 	};
-
+	
 	struct Chunk
 	{
 		int64_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
@@ -274,10 +274,18 @@ namespace LiveMemTracer
 			}
 		};
 
-		enum DisplayType
+		enum DisplayType : int
 		{
 			CALLER,
-			CALLEE
+			CALLEE,
+			HISTOGRAMS
+		};
+
+		static const char *DisplayTypeStr[] =
+		{
+			"Caller",
+			"Callee",
+			"Histograms"
 		};
 
 		static bool                                g_filterEmptyAlloc = true;
@@ -744,28 +752,32 @@ namespace LiveMemTracer
 
 		void updateHistograms()
 		{
+			const float columnNumber = 3.f;
+
+			float histoW = ImGui::GetWindowContentRegionWidth() / columnNumber;
+
+			ImVec2 pos = ImGui::GetCursorPos();
+
 			auto it = std::begin(g_histograms);
 			while (it != std::end(g_histograms))
 			{
 				auto &h = *it;
-				if (ImGui::Begin(h.alloc->str, nullptr, ImVec2(300, 200)))
+				h.count[h.cursor] = 0.f;
+				auto edge = h.alloc->edges;
+				while (edge)
 				{
-					h.count[h.cursor] = 0.f;
-					auto edge = h.alloc->edges;
-					while (edge)
-					{
-						h.count[h.cursor] += float(edge->count);
-						edge = edge->same;
-					}
-					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
-					ImGui::PlotLines("", h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(300, 200));
-					++it;
+					h.count[h.cursor] += float(edge->count);
+					edge = edge->same;
 				}
-				else
-				{
-					it = g_histograms.erase(it);
-				}
-				ImGui::End();
+				h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
+				ImGui::SetCursorPos(pos);
+				ImGui::PlotHistogram(h.alloc->str, h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(histoW * 0.8f, histoW));
+				pos = ImGui::GetCursorPos();
+				++it;
+				//else
+				//{
+				//	it = g_histograms.erase(it);
+				//}
 			}
 		}
 		void createHistogram(Alloc *alloc)
@@ -809,7 +821,16 @@ namespace LiveMemTracer
 				}
 				ImGui::PopItemWidth();
 				ImGui::SameLine();
-				ImGui::Text("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+				ImGui::PushItemWidth(110.f);
+				ImGui::PushID(DisplayTypeStr);
+				ImGui::Combo("", (int*)&g_displayType, DisplayTypeStr, 3); ImGui::SameLine();
+				ImGui::PopID();
+				ImGui::PopItemWidth();
+				ImGui::TextDisabled("(?)");
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+				}
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
@@ -847,9 +868,12 @@ namespace LiveMemTracer
 					}
 					ImGui::EndChild();
 				}
+				else if (g_displayType == HISTOGRAMS)
+				{
+					updateHistograms();
+				}
 			}
 			ImGui::End();
-			updateHistograms();
 		}
 	}
 }
