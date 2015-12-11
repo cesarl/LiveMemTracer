@@ -288,7 +288,7 @@ namespace LiveMemTracer
 		static char                                g_searchStr[g_search_str_length];
 		static DisplayType                         g_displayType = CALLER;
 		static std::vector<Histogram>              g_histograms;
-		static std::vector<Alloc*>                 g_allocMatchs;
+		static Alloc                              *g_searchResult;
 
 		inline bool searchAlloc();
 		void displayCaller(Edge *caller, int depth);
@@ -675,18 +675,28 @@ namespace LiveMemTracer
 
 		bool searchAlloc()
 		{
-			g_allocMatchs.clear();
 			Alloc *alloc = g_allocList;
+
+			Alloc **prevNext = &g_allocList;
+			g_searchResult = nullptr;
 
 			while (alloc != nullptr)
 			{
+				Alloc *next = alloc->next;
 				if (strstr(alloc->str, g_searchStr) != nullptr)
 				{
-					g_allocMatchs.push_back(alloc);
+					*prevNext = alloc->next;
+					alloc->next = g_searchResult;
+					g_searchResult = alloc;
 				}
-				alloc = alloc->next;
+				else
+				{
+					prevNext = &alloc->next;
+				}
+				alloc = next;
 			}
-			return g_allocMatchs.empty() == false;
+			*prevNext = g_searchResult;
+			return g_searchResult != nullptr;
 		}
 
 		void displayCaller(Edge *caller, int depth)
@@ -776,7 +786,7 @@ namespace LiveMemTracer
 			bool updateSearch = false;
 			g_updateRatio += dt;
 
-			if (ImGui::Begin("LiveMemoryProfiler"))
+			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar))
 			{
 				bool refresh = false;
 				ImGui::Checkbox("Filter empty allocs", &g_filterEmptyAlloc); ImGui::SameLine();
@@ -803,7 +813,6 @@ namespace LiveMemTracer
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-
 				if (updateSearch)
 				{
 					if (strlen(g_searchStr) > 0)
@@ -814,13 +823,13 @@ namespace LiveMemTracer
 
 				if (g_displayType == CALLER)
 				{
-					ImGui::Columns(2, "Callers columns");
 					ImGui::Separator();
-					ImGui::Text("Size"); ImGui::NextColumn();
-					ImGui::Text("Caller"); ImGui::NextColumn();
+					ImGui::Text("Size"); ImGui::SameLine(150);
+					ImGui::Text("Caller");
 					ImGui::Separator();
-					ImGui::Columns(1);
-					for (auto &caller : g_allocMatchs)
+					ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
+					Alloc *caller = g_searchResult;
+					while (caller)
 					{
 						if (!caller->edges)
 							continue;
@@ -834,7 +843,9 @@ namespace LiveMemTracer
 						caller->edges->lastCount = originalSize;
 						displayCaller(caller->edges, 0);
 						ImGui::Separator();
+						caller = caller->next;
 					}
+					ImGui::EndChild();
 				}
 			}
 			ImGui::End();
