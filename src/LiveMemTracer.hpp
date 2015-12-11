@@ -58,7 +58,7 @@
 #endif
 
 #if defined(LMT_DEBUG_DEV)
-#define LMT_DEBUG_ASSERT(condition, message) assert(condition,message)
+#define LMT_DEBUG_ASSERT(condition, message) assert(condition && message)
 #else
 #define LMT_DEBUG_ASSERT(condition, message) do{}while(0)
 #endif
@@ -298,14 +298,12 @@ namespace LiveMemTracer
 	}
 
 	static inline Chunk *getChunk();
-	static inline bool chunkIsFull(const Chunk *chunk);
-	static inline Chunk *getNextChunk();
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Chunk *chunk, Header *header, size_t size);
 	static inline void logFreeInChunk(Chunk *chunk, Header *header);
 	static inline void treatChunk(Chunk *chunk);
 	static inline void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
-	template <class T> inline size_t combineHash(const T& val, size_t baseHash = 14695981039346656037ULL);
+	template <class T> inline size_t combineHash(const T& val, const size_t baseHash = 14695981039346656037ULL);
 #endif
 }
 
@@ -320,10 +318,6 @@ namespace LiveMemTracer
 void *LiveMemTracer::alloc(size_t size)
 {
 	Chunk *chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
 	void *ptr = malloc(size + HEADER_SIZE);
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(chunk, header, size);
@@ -333,10 +327,6 @@ void *LiveMemTracer::alloc(size_t size)
 void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
 	Chunk *chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
 	void *ptr = INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size + HEADER_SIZE, alignment, HEADER_SIZE);
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(chunk, header, size);
@@ -364,19 +354,8 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 	}
 
 	Chunk *chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
-
 	logFreeInChunk(chunk, header);
-
 	chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
-
 	void *newPtr = ::realloc((void*)header, size + HEADER_SIZE);
 	header = (Header*)(newPtr);
 	logAllocInChunk(chunk, header, size);
@@ -388,10 +367,6 @@ void LiveMemTracer::dealloc(void *ptr)
 	if (ptr == nullptr)
 		return;
 	Chunk *chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
 	logFreeInChunk(chunk, header);
@@ -403,10 +378,6 @@ void LiveMemTracer::deallocAligned(void *ptr)
 	if (ptr == nullptr)
 		return;
 	Chunk *chunk = getChunk();
-	if (chunkIsFull(chunk))
-	{
-		chunk = getNextChunk();
-	}
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
 	logFreeInChunk(chunk, header);
@@ -432,21 +403,17 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		g_th_initialized = true;
 		g_internalAllThreadsMemoryUsed.fetch_add(g_internalPerThreadMemoryUsed);
 	}
-	return &g_th_chunks[g_th_chunkIndex];
-}
 
-bool LiveMemTracer::chunkIsFull(const LiveMemTracer::Chunk *chunk)
-{
-	if (chunk->allocIndex >= ALLOC_NUMBER_PER_CHUNK
-		|| chunk->stackIndex >= ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC)
-		return true;
-	return false;
-}
+	Chunk *currentChunk = &g_th_chunks[g_th_chunkIndex];
 
-LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
-{
-	Chunk *currentChunk = getChunk();
-	LMT_DEBUG_ASSERT(chunkIsFull(currentChunk) == true, "Why did you called me if current chunk is not full ?");
+	if (!(currentChunk->allocIndex >= ALLOC_NUMBER_PER_CHUNK
+		|| currentChunk->stackIndex >= ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC))
+	{
+		return currentChunk;
+	}
+
+	// If full ------------------------------------------------
+
 	if (currentChunk->treated.load() == ChunkStatus::PENDING)
 	{
 		// That's a recursive call, so we go to the next chunk
@@ -458,23 +425,18 @@ LiveMemTracer::Chunk *LiveMemTracer::getNextChunk()
 	}
 
 	g_th_chunkIndex = (g_th_chunkIndex + 1) % CHUNK_NUMBER;
-	Chunk *chunk = getChunk();
+	Chunk *newChunk = &g_th_chunks[g_th_chunkIndex];
 
-	while (chunk->treated.load() == ChunkStatus::PENDING)
+	while (newChunk->treated.load() == ChunkStatus::PENDING)
 	{
-#ifdef LMT_WAIT_IF_FULL
-		LMT_WAIT_IF_FULL();
-#else
-		LiveMemTracer::treatChunk(currentChunk);
-#endif
-		//wait or treat it in current thread
+		LiveMemTracer::treatChunk(newChunk);
 	}
 
 	g_th_cacheIndex = 0;
 	memset(g_th_cache, 0, sizeof(g_th_cache));
-	chunk->allocIndex = 0;
-	chunk->stackIndex = 0;
-	return chunk;
+	newChunk->allocIndex = 0;
+	newChunk->stackIndex = 0;
+	return newChunk;
 }
 
 uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
@@ -663,7 +625,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 }
 
 template <class T>
-inline size_t LiveMemTracer::combineHash(const T& val, size_t baseHash)
+inline size_t LiveMemTracer::combineHash(const T& val, const size_t baseHash)
 {
 	const uint8_t* bytes = (uint8_t*)&val;
 	const size_t count = sizeof(val);
