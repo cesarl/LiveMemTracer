@@ -8,7 +8,10 @@ static_assert(false, "LMT_PLATFORM_WINDOWS should be defined. Do not include thi
 
 #include <Windows.h>
 #include "imagehlp.h"
+#include "Shlwapi.h" //StrStrI
 #pragma comment(lib, "imagehlp.lib")
+#pragma comment(lib, "Shlwapi.lib")
+
 
 #define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)_aligned_offset_malloc(size, alignment, offset)
 #define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)_aligned_free(ptr)

@@ -815,7 +815,7 @@ namespace LiveMemTracer
 			while (alloc != nullptr)
 			{
 				Alloc *next = alloc->next;
-				if (strstr(alloc->str, g_searchStr) != nullptr)
+				if (StrStrI(alloc->str, g_searchStr) != nullptr)
 				{
 					*prevNext = alloc->next;
 					alloc->next = g_searchResult;

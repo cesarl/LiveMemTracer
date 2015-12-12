@@ -304,8 +304,8 @@ int main(int ac, char **av)
 
 	// Setup ImGui binding
 	ImGui_ImplGlfwGL3_Init(window, true);
-	ImGui::GetIO().MemAllocFn = &LiveMemTracer::alloc;
-	ImGui::GetIO().MemFreeFn = &LiveMemTracer::dealloc;
+	ImGui::GetIO().MemAllocFn = &myMalloc;
+	ImGui::GetIO().MemFreeFn = &myFree;
 
 	ImVec4 clear_color = ImColor(114, 144, 154);
 
