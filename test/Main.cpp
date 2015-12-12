@@ -13,13 +13,16 @@ public:
 			_threads[i] = std::thread([this](){
 				while (_exit == false)
 				{
-					std::unique_lock<std::mutex> lock(_mutex);
-					_cond.wait(lock);
-					if (_exit)
-						return;
-					auto &task = _queue.back();
-					task();
-					_queue.pop();
+					std::function<void()> fn;
+					{
+						std::unique_lock<std::mutex> lock(_mutex);
+						_cond.wait(lock);
+						if (_exit)
+							return;
+						fn = _queue.back();
+						_queue.pop();
+					}
+					fn();
 				}
 			});
 		}
@@ -50,21 +53,27 @@ private:
 	bool _exit = false;
 };
 
- WorkerThread g_workerThread;
+static WorkerThread g_workerThread;
 
 #define LMT_ENABLED 1
-#define LMT_ALLOC_NUMBER_PER_CHUNK 1024
+#define LMT_ALLOC_NUMBER_PER_CHUNK 256
 #define LMT_STACK_SIZE_PER_ALLOC 50
-#define LMT_CHUNK_NUMBER_PER_THREAD 16
+#define LMT_CHUNK_NUMBER_PER_THREAD 2
 #define LMT_CACHE_SIZE 16
 #define LMT_PLATFORM_WINDOWS 1
 #define LMT_DEBUG_DEV 1
-
-#define LMT_TREAT_CHUNK(chunk) g_workerThread.push([=](){ LiveMemTracer::treatChunk(chunk); })
-
 #define LMT_IMPL 1
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
+
+#define SINGLE_THREADED 1
+
+#if defined(SINGLE_THREADED)
+#define LMT_SINGLE_THREADED 1
+#define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk)
+#else
+#define LMT_TREAT_CHUNK(chunk) g_workerThread.push([=](){LiveMemTracer::treatChunk(chunk);})
+#endif
 
 #include "../Src/LiveMemTracer.hpp"
 
@@ -280,6 +289,8 @@ void smallLeak()
 
 int main(int ac, char **av)
 {
+	LMT_INIT();
+
 	// Setup window
 	glfwSetErrorCallback(error_callback);
 	if (!glfwInit())
