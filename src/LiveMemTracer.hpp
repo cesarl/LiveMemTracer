@@ -536,7 +536,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		}
 		g_th_currentChunk = createPreallocatedChunk(status);
 		// And treat old chunk
-		if (g_th_currentChunk && oldChunk)
+		if (g_th_currentChunk && oldChunk && g_th_recurseCounter < 2)
 		{
 			LMT_TREAT_CHUNK(oldChunk);
 		}
@@ -548,7 +548,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		// Else we create a temporary one
 		g_th_currentChunk = createTemporaryChunk();
 
-		if (g_th_currentChunk && oldChunk)
+		if (g_th_currentChunk && oldChunk && g_th_recurseCounter < 2)
 		{
 			LMT_TREAT_CHUNK(oldChunk);
 		}
@@ -1004,6 +1004,7 @@ namespace LiveMemTracer
 
 void LiveMemTracer::display(float dt)
 {
+	RecurseCounter recurseCounter;
 	Renderer::render(dt);
 }
 #else
