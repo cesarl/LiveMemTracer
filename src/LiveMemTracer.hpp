@@ -1,11 +1,11 @@
 #pragma once
 
 #ifndef LMT_ENABLED
-#define LMT_ALLOC(size)malloc(size)
-#define LMT_ALLOC_ALIGNED(size, alignment)malloc(size)
-#define LMT_DEALLOC(ptr)free(ptr)
-#define LMT_DEALLOC_ALIGNED(ptr, alignment)free(ptr)
-#define LMT_REALLOC(ptr, size)realloc(ptr, size)
+#define LMT_ALLOC(size)::malloc(size)
+#define LMT_ALLOC_ALIGNED(size, alignment)::malloc(size)
+#define LMT_DEALLOC(ptr)::free(ptr)
+#define LMT_DEALLOC_ALIGNED(ptr, alignment)::free(ptr)
+#define LMT_REALLOC(ptr, size)::realloc(ptr, size)
 #define LMT_DISPLAY(dt)do{}while(0)
 #define LMT_EXIT()do{}while(0)
 #define LMT_INIT()do{}while(0)
@@ -235,7 +235,6 @@ namespace LiveMemTracer
 
 	static std::atomic<RunningStatus>                   g_runningStatus = NOT_INITIALIZED;
 
-	__declspec(thread) static Chunk                     *g_th_tmpChunks = nullptr;
 	__declspec(thread) static Chunk                     *g_th_currentChunk = nullptr;
 	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
 	__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
@@ -243,6 +242,7 @@ namespace LiveMemTracer
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 	__declspec(thread) static bool                      g_th_initialized = false;
 	__declspec(thread) static size_t                    g_th_hitCount = 0;
+	__declspec(thread) static size_t                    g_th_recurseCounter = 0;
 
 
 	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
@@ -426,7 +426,7 @@ bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk, const RunningStatus statu
 	return (chunk
 		&& chunk->allocIndex < ALLOC_NUMBER_PER_CHUNK
 		&& chunk->stackIndex < ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC
-		&& ((status != RUNNING) || (g_th_hitCount < ALLOC_NUMBER_PER_CHUNK * 2)));
+		&& ((status != RUNNING) || (g_th_hitCount < ALLOC_NUMBER_PER_CHUNK * 10)));
 }
 
 LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
@@ -434,8 +434,6 @@ LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 	void *ptr = ::malloc(sizeof(Chunk));
 	memset(ptr, 0, sizeof(Chunk));
 	Chunk *tmpChunk = new(ptr)Chunk;
-	tmpChunk->next = g_th_tmpChunks;
-	g_th_tmpChunks = tmpChunk;
 
 	memset(g_th_cache, 0, sizeof(g_th_cache));
 	g_th_cacheIndex = 0;
@@ -475,8 +473,22 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 	return chunk;
 }
 
+struct RecurseCounter
+{
+	RecurseCounter()
+	{
+		++LiveMemTracer::g_th_recurseCounter;
+	}
+	~RecurseCounter()
+	{
+		--LiveMemTracer::g_th_recurseCounter;
+	}
+};
+
 LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 {
+	RecurseCounter recurseCounter;
+
 	Chunk *currentChunk = nullptr;
 	const RunningStatus status = g_runningStatus;
 	
@@ -513,13 +525,6 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		// If current chunk is not full and treat current chunk time is not came
 		if (chunkIsNotFull(g_th_currentChunk, status))
 		{
-			while (g_th_tmpChunks && g_th_tmpChunks != g_th_currentChunk)
-			{
-				auto ptr = g_th_tmpChunks;
-				g_th_tmpChunks = g_th_tmpChunks->next;
-				LMT_TREAT_CHUNK(ptr);
-			}
-
 			return g_th_currentChunk;
 		}
 		// Else we search for a new one
@@ -531,7 +536,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		}
 		g_th_currentChunk = createPreallocatedChunk(status);
 		// And treat old chunk
-		if (oldChunk && oldChunk->status != ChunkStatus::TEMPORARY)
+		if (g_th_currentChunk && oldChunk)
 		{
 			LMT_TREAT_CHUNK(oldChunk);
 		}
@@ -542,6 +547,12 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 		}
 		// Else we create a temporary one
 		g_th_currentChunk = createTemporaryChunk();
+
+		if (g_th_currentChunk && oldChunk)
+		{
+			LMT_TREAT_CHUNK(oldChunk);
+		}
+
 		return g_th_currentChunk;
 	}
 	return nullptr;

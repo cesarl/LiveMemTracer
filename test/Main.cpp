@@ -66,7 +66,7 @@ static WorkerThread g_workerThread;
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
 
-#define SINGLE_THREADED 1
+//#define SINGLE_THREADED 1
 
 #if defined(SINGLE_THREADED)
 #define LMT_SINGLE_THREADED 1
