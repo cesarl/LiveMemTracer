@@ -913,7 +913,7 @@ namespace LiveMemTracer
 			const int columnNumber = 3;
 			int i = 0;
 			float histoW = ImGui::GetWindowContentRegionWidth() / columnNumber;
-
+			ImVec2 graphSize(histoW, histoW * 0.4f);
 			auto it = std::begin(g_histograms);
 			while (it != std::end(g_histograms))
 			{
@@ -966,8 +966,26 @@ namespace LiveMemTracer
 				{
 					ImGui::SetTooltip(h.name);
 				}
-				//PlotLines(const char* label, const float* values, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0,0), int stride = sizeof(float));
-				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, ImVec2(histoW, histoW * 0.4f), sizeof(int64_t));
+				ImVec2 cursorPos = ImGui::GetCursorPos();
+				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, graphSize, sizeof(int64_t));
+				ImGui::SetCursorPos(cursorPos);
+				ImGui::InvisibleButton("##invisibleButton", graphSize);
+				if (ImGui::IsItemHovered())
+				{
+					ImVec2 itemMin = ImGui::GetItemRectMin();
+					ImGuiIO& g = ImGui::GetIO();
+					const float x = (graphSize.x - (g.MousePos.x - itemMin.x)) / graphSize.x;
+					const int itemCount = HISTORY_FRAME_NUMBER;
+					const int id = itemCount - (int)(x * itemCount);
+					const int itemIndex = (id + h.cursor) % itemCount;
+
+					ImGui::SetTooltip("");
+					ImGui::BeginTooltip();
+					const char *ttSuffix;
+					float ttSize = formatMemoryString(h.count[itemIndex], suffix);
+					ImGui::Text("%f %s", ttSize, suffix);
+					ImGui::EndTooltip();
+				}
 				ImGui::EndGroup();
 				if (ImGui::BeginPopupContextItem("Options"))
 				{
