@@ -68,7 +68,7 @@
 #ifndef LMT_IMPLEMENTED
 #define LMT_IMPLEMENTED 1
 #else
-static_assert(false, "LMT is already implemented, do not define LMT_IMPLEMENTED more than once.");
+static_assert(false, "LMT is already implemented, do not define LMT_IMPL more than once.");
 #endif
 
 #if !defined(LMT_PLATFORM_WINDOWS) && !defined(LMT_PLATFORM_ORBIS)

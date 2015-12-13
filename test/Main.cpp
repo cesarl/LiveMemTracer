@@ -91,7 +91,7 @@ static void error_callback(int error, const char* description)
 	fprintf(stderr, "Error %d: %s\n", error, description);
 }
 
-#ifdef OVERRIDE_NEW
+#if defined(OVERRIDE_NEW)
 //////////////////////////////////////////////////////////////////////////
 void *myMalloc(size_t size)
 {
@@ -188,6 +188,10 @@ void operator delete[](void *ptr, size_t alignment, const std::nothrow_t&) throw
 	return myFree(ptr);
 }
 //////////////////////////////////////////////////////////////////////////
+#else
+inline void *myMalloc(size_t size) { return ::malloc(size); }
+inline void myFree(void *ptr) { ::free(ptr); }
+inline void *myRealloc(void *ptr, size_t size) { return ::realloc(ptr, size); }
 #endif
 
 struct Bar
