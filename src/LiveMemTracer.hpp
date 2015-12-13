@@ -315,6 +315,7 @@ namespace LiveMemTracer
 
 		static bool                                g_refeshAuto = true;
 		static bool                                g_refresh = false;
+		static bool                                g_updateSearch = false;
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
@@ -324,7 +325,10 @@ namespace LiveMemTracer
 
 		inline bool searchAlloc();
 		void displayCallee(Edge *callee, bool callerTooltip);
-		inline void updateHistograms();
+		inline void renderCallees();
+		inline void renderMenu();
+		inline void renderHistograms();
+		inline void renderStack();
 		inline void createHistogram(Alloc *function);
 		inline void createHistogram(Edge  *functionCall);
 		inline void display(float dt);
@@ -908,7 +912,78 @@ namespace LiveMemTracer
 			ImGui::PopID();
 		}
 
-		void updateHistograms()
+		void renderCallees()
+		{
+			ImGui::Separator();
+			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImGui::Text("Callee");
+			ImGui::Separator();
+			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
+			Alloc *callee = g_searchResult;
+			int i = 0;
+			while (callee)
+			{
+				if (!callee->edges)
+				{
+					callee = callee->next;
+					continue;
+				}
+
+				ImGui::PushID(callee);
+				if (g_refresh)
+				{
+					callee->lastCount = callee->counter;
+				}
+				++i;
+				auto cursorPos = ImGui::GetCursorPos();
+				if (i % 2)
+				{
+					ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.78f, 0.45f));
+					ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.4f, 0.78f, 0.65f));
+					ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.4f, 0.78f, 0.85f));
+				}
+				else
+				{
+					ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.57f, 0.78f, 0.45f));
+					ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.57f, 0.78f, 0.65f));
+					ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.57f, 0.78f, 0.85f));
+				}
+				bool opened = ImGui::CollapsingHeader("##dummy", "Coucou", true, false);
+				if (ImGui::BeginPopupContextItem("Options"))
+				{
+					if (ImGui::Selectable("Watch function"))
+					{
+						createHistogram(callee);
+					}
+					ImGui::EndPopup();
+				}
+
+				cursorPos.x += 25;
+				cursorPos.y += 3;
+				const char *suffix;
+				float size = formatMemoryString(callee->lastCount, suffix);
+				ImGui::SetCursorPos(cursorPos);
+				ImGui::Text("%f %s", size, suffix);
+				cursorPos.x += 150 - 25;
+				ImGui::SetCursorPos(cursorPos);
+				ImGui::Text("%s", callee->str);
+				if (opened)
+				{
+					Edge *edge = callee->edges;
+					while (edge)
+					{
+						displayCallee(edge, true);
+						edge = edge->same;
+					}
+				}
+				ImGui::PopID();
+				ImGui::PopStyleColor(3);
+				callee = callee->next;
+			}
+			ImGui::EndChild();
+		}
+
+		void renderHistograms()
 		{
 			const int columnNumber = 3;
 			int i = 0;
@@ -917,28 +992,12 @@ namespace LiveMemTracer
 			auto it = std::begin(g_histograms);
 			while (it != std::end(g_histograms))
 			{
-
 				auto &h = *it;
 				if (g_searchStr[0] && StrStrI(h.name, g_searchStr) == nullptr)
 				{
 					++it;
 					continue;
 				}
-				if (g_refresh)
-				{
-					if (h.isFunction)
-					{
-						h.currentCount = h.function->counter;
-						h.count[h.cursor] = h.currentCount;
-					}
-					else
-					{
-						h.currentCount = h.call->count;
-						h.count[h.cursor] = h.currentCount;
-					}
-					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
-				}
-
 				
 				bool toDelete = false;
 				ImGui::PushID(i);
@@ -1040,44 +1099,61 @@ namespace LiveMemTracer
 			last.isFunction = false;
 		}
 
+		void renderStack()
+		{
+			ImGui::Separator();
+			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImGui::Text("Callee");
+			ImGui::Separator();
+			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
+			for (auto &root : g_allocStackRoots)
+			{
+				displayCallee(root, false);
+			}
+			ImGui::EndChild();
+		}
+
+		void renderMenu()
+		{
+			if (ImGui::BeginMenuBar())
+			{
+				ImGui::PushItemWidth(110.f);
+				ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, DisplayType::END); ImGui::SameLine();
+				ImGui::Checkbox("Refresh auto", &g_refeshAuto);
+				if (!g_refeshAuto)
+				{
+					ImGui::SameLine();
+					g_refresh = ImGui::Button("Refresh");
+				}
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+				}
+				if (g_displayType != DisplayType::STACK)
+				{
+					ImGui::SameLine();
+					if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
+					{
+						g_updateSearch = true;
+					}
+				}
+				ImGui::SameLine();
+				ImGui::TextDisabled("(?)");
+				ImGui::PopItemWidth();
+				ImGui::EndMenuBar();
+			}
+		}
+
 		void render(float dt)
 		{
 			g_refresh = false;
-			bool updateSearch = false;
+			g_updateSearch = false;
 			g_updateRatio += dt;
 
 			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar))
 			{
-				bool refresh = false;
-				if (ImGui::BeginMenuBar())
-				{
-					ImGui::PushItemWidth(110.f);
-					ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, DisplayType::END); ImGui::SameLine();
-					ImGui::Checkbox("Refresh auto", &g_refeshAuto);
-					if (!g_refeshAuto)
-					{
-						ImGui::SameLine();
-						refresh = ImGui::Button("Refresh");
-					}
-					if (ImGui::IsItemHovered())
-					{
-						ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
-					}
-					if (g_displayType != DisplayType::STACK)
-					{
-						ImGui::SameLine();
-						if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
-						{
-							updateSearch = true;
-						}
-					}
-					ImGui::SameLine();
-					ImGui::TextDisabled("(?)");
-					ImGui::PopItemWidth();
-					ImGui::EndMenuBar();
-				}
-
-				if ((g_refeshAuto && g_updateRatio >= 1.f) || refresh)
+				renderMenu();
+				if (g_refeshAuto && g_updateRatio >= 1.f)
 				{
 					g_refresh = true;
 					g_updateRatio = 0.f;
@@ -1085,7 +1161,7 @@ namespace LiveMemTracer
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-				if (updateSearch)
+				if (g_updateSearch)
 				{
 					if (strlen(g_searchStr) > 0)
 					{
@@ -1095,93 +1171,37 @@ namespace LiveMemTracer
 
 				if (g_displayType == DisplayType::CALLEE)
 				{
-					ImGui::Separator();
-					ImGui::Text("Size"); ImGui::SameLine(150);
-					ImGui::Text("Callee");
-					ImGui::Separator();
-					ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
-					Alloc *callee = g_searchResult;
-					int i = 0;
-					while (callee)
-					{
-						if (!callee->edges)
-						{
-							callee = callee->next;
-							continue;
-						}
-						
-						ImGui::PushID(callee);
-						if (g_refresh)
-						{
-							callee->lastCount = callee->counter;
-						}
-						++i;
-						auto cursorPos = ImGui::GetCursorPos();
-						if (i % 2)
-						{
-							ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.78f, 0.45f));
-							ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.4f, 0.78f, 0.65f));
-							ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.4f, 0.78f, 0.85f));
-						}
-						else
-						{
-							ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.57f, 0.78f, 0.45f));
-							ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.57f, 0.78f, 0.65f));
-							ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.57f, 0.78f, 0.85f));
-						}
-						bool opened = ImGui::CollapsingHeader("##dummy", "Coucou", true, false);
-						if (ImGui::BeginPopupContextItem("Options"))
-						{
-							if (ImGui::Selectable("Watch function"))
-							{
-								createHistogram(callee);
-							}
-							ImGui::EndPopup();
-						}
-
-						cursorPos.x += 25;
-						cursorPos.y += 3;
-						const char *suffix;
-						float size = formatMemoryString(callee->lastCount, suffix);
-						ImGui::SetCursorPos(cursorPos);
-						ImGui::Text("%f %s", size, suffix);
-						cursorPos.x += 150 - 25;
-						ImGui::SetCursorPos(cursorPos);
-						ImGui::Text("%s", callee->str);
-						if (opened)
-						{
-							Edge *edge = callee->edges;
-							while (edge)
-							{
-								displayCallee(edge, true);
-								edge = edge->same;
-							}
-						}
-						ImGui::PopID();
-						ImGui::PopStyleColor(3);
-						callee = callee->next;
-					}
-					ImGui::EndChild();
+					renderCallees();
 				}
 				else if (g_displayType == DisplayType::HISTOGRAMS)
 				{
-					updateHistograms();
+					renderHistograms();
 				}
 				else if (g_displayType == DisplayType::STACK)
 				{
-					ImGui::Separator();
-					ImGui::Text("Size"); ImGui::SameLine(150);
-					ImGui::Text("Callee");
-					ImGui::Separator();
-					ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false,ImGuiWindowFlags_HorizontalScrollbar);
-					for (auto &root : g_allocStackRoots)
-					{
-						displayCallee(root, false);
-					}
-					ImGui::EndChild();
+					renderStack();
 				}
 			}
 			ImGui::End();
+		
+			if (g_refresh)
+			{
+				std::lock_guard<std::mutex> lock(g_mutex);
+				for (auto &h : g_histograms)
+				{
+					if (h.isFunction)
+					{
+						h.currentCount = h.function->counter;
+						h.count[h.cursor] = h.currentCount;
+					}
+					else
+					{
+						h.currentCount = h.call->count;
+						h.count[h.cursor] = h.currentCount;
+					}
+					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
+				}
+			}
 		}
 	}
 }
