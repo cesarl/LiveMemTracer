@@ -69,7 +69,6 @@ static WorkerThread g_workerThread;
 //#define SINGLE_THREADED 1
 
 #if defined(SINGLE_THREADED)
-#define LMT_SINGLE_THREADED 1
 #define LMT_TREAT_CHUNK(chunk) LiveMemTracer::treatChunk(chunk)
 #else
 #define LMT_TREAT_CHUNK(chunk) g_workerThread.push([=](){LiveMemTracer::treatChunk(chunk);})

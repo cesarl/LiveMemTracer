@@ -144,11 +144,12 @@ namespace LiveMemTracer
 	struct Alloc
 	{
 		int64_t counter;
+		int64_t lastCount;
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
 		Edge  *edges;
-		Alloc() : counter(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
+		Alloc() : counter(0), lastCount(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
 	};
 
 	struct AllocStack
@@ -282,10 +283,13 @@ namespace LiveMemTracer
 	{
 		struct Histogram
 		{
-			Alloc *alloc;
+			Alloc *function;
+			Edge  *call;
+			const char *name;
+			bool  isFunction;
 			float count[HISTORY_FRAME_NUMBER];
 			size_t  cursor;
-			Histogram() : alloc(nullptr), cursor(0)
+			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0)
 			{
 				memset(count, 0, sizeof(count));
 			}
@@ -320,7 +324,8 @@ namespace LiveMemTracer
 		inline bool searchAlloc();
 		void displayCallee(Edge *caller, int depth);
 		inline void updateHistograms();
-		inline void createHistogram(Alloc *alloc);
+		inline void createHistogram(Alloc *function);
+		inline void createHistogram(Edge  *functionCall);
 		inline void display(float dt);
 	}
 
@@ -862,7 +867,7 @@ namespace LiveMemTracer
 				callee->lastCount = callee->count;
 			}
 
-			ImGui::PushID(callee->alloc);
+			ImGui::PushID(callee);
 			const char *suffix;
 			float size = formatMemoryString(callee->lastCount, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
@@ -876,17 +881,12 @@ namespace LiveMemTracer
 				size_t depth;
 				displayCallerTooltip(callee->from, depth);
 				ImGui::EndTooltip();
-				//ImGui::SetTooltip(callee->alloc->str);
 			}
 			if (ImGui::BeginPopupContextItem("Options"))
 			{
-				if (ImGui::Selectable("Watch"))
+				if (ImGui::Selectable("Watch call"))
 				{
-					createHistogram(callee->alloc);
-				}
-				if (ImGui::Selectable("Show callers"))
-				{
-					createHistogram(callee->alloc);
+					createHistogram(callee);
 				}
 				ImGui::EndPopup();
 			}
@@ -911,16 +911,22 @@ namespace LiveMemTracer
 			while (it != std::end(g_histograms))
 			{
 				auto &h = *it;
-				h.count[h.cursor] = 0.f;
-				auto edge = h.alloc->edges;
-				while (edge)
+				if (g_refresh)
 				{
-					h.count[h.cursor] += float(edge->count);
-					edge = edge->same;
+					if (h.isFunction)
+					{
+						h.function->lastCount = h.function->counter;
+						h.count[h.cursor] = h.function->lastCount;
+					}
+					else
+					{
+						h.call->lastCount = h.call->count;
+						h.count[h.cursor] = h.call->lastCount;
+					}
+					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				}
-				h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				ImGui::SetCursorPos(pos);
-				ImGui::PlotHistogram(h.alloc->str, h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(histoW * 0.8f, histoW));
+				ImGui::PlotHistogram(h.name, h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(histoW * 0.8f, histoW));
 				pos = ImGui::GetCursorPos();
 				++it;
 				//else
@@ -929,16 +935,33 @@ namespace LiveMemTracer
 				//}
 			}
 		}
-		void createHistogram(Alloc *alloc)
+
+		void createHistogram(Alloc *function)
 		{
 			for (auto &h : g_histograms)
 			{
-				if (h.alloc == alloc)
+				if (h.function == function)
 					return;
 			}
 			g_histograms.resize(g_histograms.size() + 1);
 			auto &last = g_histograms.back();
-			last.alloc = alloc;
+			last.function = function;
+			last.name = function->str;
+			last.isFunction = true;
+		}
+
+		void createHistogram(Edge *functionCall)
+		{
+			for (auto &h : g_histograms)
+			{
+				if (h.call == functionCall)
+					return;
+			}
+			g_histograms.resize(g_histograms.size() + 1);
+			auto &last = g_histograms.back();
+			last.call = functionCall;
+			last.name = functionCall->alloc->str;
+			last.isFunction = false;
 		}
 
 		void render(float dt)
@@ -999,6 +1022,7 @@ namespace LiveMemTracer
 					ImGui::Separator();
 					ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
 					Alloc *callee = g_searchResult;
+					int i = 0;
 					while (callee)
 					{
 						if (!callee->edges)
@@ -1007,23 +1031,55 @@ namespace LiveMemTracer
 							continue;
 						}
 						
-						ImGui::PushID(callee->str);
-						const char *suffix;
-						float size = formatMemoryString(callee->counter, suffix);
+						ImGui::PushID(callee);
+						if (g_refresh)
+						{
+							callee->lastCount = callee->counter;
+						}
+						++i;
 						auto cursorPos = ImGui::GetCursorPos();
+						if (i % 2)
+						{
+							ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.78f, 0.45f));
+							ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.4f, 0.78f, 0.65f));
+							ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.4f, 0.78f, 0.85f));
+						}
+						else
+						{
+							ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.57f, 0.78f, 0.45f));
+							ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.57f, 0.78f, 0.65f));
+							ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.57f, 0.78f, 0.85f));
+						}
+						bool opened = ImGui::CollapsingHeader("##dummy", "Coucou", true, false);
+						if (ImGui::BeginPopupContextItem("Options"))
+						{
+							if (ImGui::Selectable("Watch function"))
+							{
+								createHistogram(callee);
+							}
+							ImGui::EndPopup();
+						}
+
+						cursorPos.x += 25;
+						cursorPos.y += 3;
+						const char *suffix;
+						float size = formatMemoryString(callee->lastCount, suffix);
+						ImGui::SetCursorPos(cursorPos);
 						ImGui::Text("%f %s", size, suffix);
-						cursorPos.x += 150;
+						cursorPos.x += 150 - 25;
 						ImGui::SetCursorPos(cursorPos);
 						ImGui::Text("%s", callee->str);
-						ImGui::Separator();
-						Edge *edge = callee->edges;
-						while (edge)
+						if (opened)
 						{
-							displayCallee(edge, 0);
-							edge = edge->same;
+							Edge *edge = callee->edges;
+							while (edge)
+							{
+								displayCallee(edge, 0);
+								edge = edge->same;
+							}
 						}
 						ImGui::PopID();
-						ImGui::Separator();
+						ImGui::PopStyleColor(3);
 						callee = callee->next;
 					}
 					ImGui::EndChild();
