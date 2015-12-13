@@ -287,9 +287,10 @@ namespace LiveMemTracer
 			Edge  *call;
 			const char *name;
 			bool  isFunction;
-			float count[HISTORY_FRAME_NUMBER];
+			int64_t count[HISTORY_FRAME_NUMBER];
 			size_t  cursor;
-			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0)
+			int64_t currentCount;
+			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), currentCount(0)
 			{
 				memset(count, 0, sizeof(count));
 			}
@@ -312,7 +313,6 @@ namespace LiveMemTracer
 			"Histograms"
 		};
 
-		static bool                                g_filterEmptyAlloc = true;
 		static bool                                g_refeshAuto = true;
 		static bool                                g_refresh = false;
 		static float                               g_updateRatio = 0.f;
@@ -897,6 +897,10 @@ namespace LiveMemTracer
 			}
 			if (opened)
 			{
+				if (g_refresh)
+				{
+					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->lastCount > b->lastCount; });
+				}
 				for (auto &to : callee->to)
 					displayCallee(to, callerTooltip);
 				ImGui::TreePop();
@@ -906,39 +910,88 @@ namespace LiveMemTracer
 
 		void updateHistograms()
 		{
-			const float columnNumber = 3.f;
-
+			const int columnNumber = 3;
+			int i = 0;
 			float histoW = ImGui::GetWindowContentRegionWidth() / columnNumber;
-
-			ImVec2 pos = ImGui::GetCursorPos();
 
 			auto it = std::begin(g_histograms);
 			while (it != std::end(g_histograms))
 			{
+
 				auto &h = *it;
+				if (g_searchStr[0] && StrStrI(h.name, g_searchStr) == nullptr)
+				{
+					++it;
+					continue;
+				}
 				if (g_refresh)
 				{
 					if (h.isFunction)
 					{
-						h.function->lastCount = h.function->counter;
-						h.count[h.cursor] = h.function->lastCount;
+						h.currentCount = h.function->counter;
+						h.count[h.cursor] = h.currentCount;
 					}
 					else
 					{
-						h.call->lastCount = h.call->count;
-						h.count[h.cursor] = h.call->lastCount;
+						h.currentCount = h.call->count;
+						h.count[h.cursor] = h.currentCount;
 					}
 					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				}
-				ImGui::SetCursorPos(pos);
-				ImGui::PlotHistogram(h.name, h.count, HISTORY_FRAME_NUMBER, h.cursor, NULL, FLT_MAX, FLT_MAX, ImVec2(histoW * 0.8f, histoW));
-				pos = ImGui::GetCursorPos();
-				++it;
-				//else
-				//{
-				//	it = g_histograms.erase(it);
-				//}
+
+				
+				bool toDelete = false;
+				ImGui::PushID(i);
+				ImGui::PushItemWidth(histoW);
+				ImGui::BeginGroup();
+				ImGui::BeginGroup();
+				ImGui::TextColored(h.isFunction ? ImColor(217, 164, 22) : ImColor(209, 6, 145), "%s", h.isFunction ? "Function" : "Call"); ImGui::SameLine();
+				const char *suffix;
+				float size = formatMemoryString(h.currentCount, suffix);
+				ImGui::Text("%f %s", size, suffix);
+				if (h.isFunction == false)
+				{
+					ImGui::SameLine();
+					ImGui::TextDisabled("(?)");
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::BeginTooltip();
+						size_t depth;
+						displayCallerTooltip(h.call->from, depth);
+						ImGui::EndTooltip();
+					}
+				}
+				ImGui::Text("%.*s", int(histoW * 0.145f), h.name);
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip(h.name);
+				}
+				//PlotLines(const char* label, const float* values, int values_count, int values_offset = 0, const char* overlay_text = NULL, float scale_min = FLT_MAX, float scale_max = FLT_MAX, ImVec2 graph_size = ImVec2(0,0), int stride = sizeof(float));
+				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, ImVec2(histoW, histoW * 0.4f), sizeof(int64_t));
+				ImGui::EndGroup();
+				if (ImGui::BeginPopupContextItem("Options"))
+				{
+					toDelete = ImGui::Selectable("Delete");
+					ImGui::EndPopup();
+				}
+				ImGui::EndGroup();
+				ImGui::PopItemWidth();
+				ImGui::PopID();
+				if ((i % columnNumber) < columnNumber - 1)
+					ImGui::SameLine();
+				else
+					ImGui::Separator();
+				if (toDelete)
+				{
+					it = g_histograms.erase(it);
+				}
+				else
+				{
+					++it;
+					++i;
+				}
 			}
+			ImGui::Columns(1);
 		}
 
 		void createHistogram(Alloc *function)
@@ -975,39 +1028,42 @@ namespace LiveMemTracer
 			bool updateSearch = false;
 			g_updateRatio += dt;
 
-			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar))
+			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar))
 			{
 				bool refresh = false;
-				ImGui::Checkbox("Filter empty allocs", &g_filterEmptyAlloc); ImGui::SameLine();
-				ImGui::Checkbox("Refresh auto", &g_refeshAuto); ImGui::SameLine();
-				if (!g_refeshAuto)
+				if (ImGui::BeginMenuBar())
 				{
-					refresh = ImGui::Button("Refresh");
+					ImGui::PushItemWidth(110.f);
+					ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, DisplayType::END); ImGui::SameLine();
+					ImGui::Checkbox("Refresh auto", &g_refeshAuto);
+					if (!g_refeshAuto)
+					{
+						ImGui::SameLine();
+						refresh = ImGui::Button("Refresh");
+					}
+					if (ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+					}
+					if (g_displayType != DisplayType::STACK)
+					{
+						ImGui::SameLine();
+						if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
+						{
+							updateSearch = true;
+						}
+					}
 					ImGui::SameLine();
+					ImGui::TextDisabled("(?)");
+					ImGui::PopItemWidth();
+					ImGui::EndMenuBar();
 				}
-			
+
 				if ((g_refeshAuto && g_updateRatio >= 1.f) || refresh)
 				{
 					g_refresh = true;
 					g_updateRatio = 0.f;
-				}
-				ImGui::PushItemWidth(300.f);
-				if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
-				{
-					updateSearch = true;
-				}
-				ImGui::PopItemWidth();
-				ImGui::SameLine();
-				ImGui::PushItemWidth(110.f);
-				ImGui::PushID(DisplayTypeStr);
-				ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, DisplayType::END); ImGui::SameLine();
-				ImGui::PopID();
-				ImGui::PopItemWidth();
-				ImGui::TextDisabled("(?)");
-				if (ImGui::IsItemHovered())
-				{
-					ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
-				}
+				}				
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
