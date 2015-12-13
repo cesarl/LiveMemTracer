@@ -167,8 +167,8 @@ namespace LiveMemTracer
 		std::vector<Edge*> to;
 		Edge *from;
 		Edge *same;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr), lastCount(0) {}
 		int64_t lastCount;
+		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr), lastCount(0) {}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -245,10 +245,10 @@ namespace LiveMemTracer
 	__declspec(thread) static size_t                    g_th_recurseCounter = 0;
 
 
-	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
-	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
 	static Alloc                                               *g_allocList = nullptr;
 
+	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
+	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
 	static Dictionary<size_t, Edge, TREE_DICTIONARY_SIZE>       g_tree;
 
 	static std::vector<Edge*>                                   g_allocStackRoots;
@@ -295,6 +295,7 @@ namespace LiveMemTracer
 		{
 			CALLER,
 			CALLEE,
+			STACK,
 			HISTOGRAMS
 		};
 
@@ -302,6 +303,7 @@ namespace LiveMemTracer
 		{
 			"Caller",
 			"Callee",
+			"Stack",
 			"Histograms"
 		};
 
@@ -311,12 +313,12 @@ namespace LiveMemTracer
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
-		static DisplayType                         g_displayType = CALLER;
+		static DisplayType                         g_displayType = CALLEE;
 		static std::vector<Histogram>              g_histograms;
 		static Alloc                              *g_searchResult;
 
 		inline bool searchAlloc();
-		void displayCaller(Edge *caller, int depth);
+		void displayCallee(Edge *caller, int depth);
 		inline void updateHistograms();
 		inline void createHistogram(Alloc *alloc);
 		inline void display(float dt);
@@ -831,44 +833,67 @@ namespace LiveMemTracer
 			return g_searchResult != nullptr;
 		}
 
-		void displayCaller(Edge *caller, int depth)
+		void displayCallerTooltip(Edge *from, size_t &depth)
 		{
-			if (!caller)
+			if (!from)
+				return;
+			size_t depthCopy = depth;
+			displayCallerTooltip(from->from, ++depth);
+			if (from->from)
+				ImGui::Indent();
+			ImGui::Text(from->alloc->str);
+			if (depthCopy == 0)
+			{
+				while (depth - 1 > 0)
+				{
+					ImGui::Unindent();
+					--depth;
+				}
+			}
+		}
+
+		void displayCallee(Edge *callee, int depth)
+		{
+			if (!callee)
 				return;
 			
 			if (g_refresh)
 			{
-				caller->lastCount = caller->count;
+				callee->lastCount = callee->count;
 			}
 
-			ImGui::PushID(caller->alloc);
+			ImGui::PushID(callee->alloc);
 			const char *suffix;
-			float size = formatMemoryString(caller->lastCount, suffix);
+			float size = formatMemoryString(callee->lastCount, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
-			const bool opened = ImGui::TreeNode(caller, "%f %s", size, suffix);
+			const bool opened = ImGui::TreeNode(callee, "%f %s", size, suffix);
 			cursorPos.x += 150;
 			ImGui::SetCursorPos(cursorPos);
-			ImGui::Text("%s", caller->alloc->str);
+			ImGui::Text("%s", callee->alloc->str);
 			if (ImGui::IsItemHovered())
 			{
-				ImGui::SetTooltip(caller->alloc->str);
+				ImGui::BeginTooltip();
+				size_t depth;
+				displayCallerTooltip(callee->from, depth);
+				ImGui::EndTooltip();
+				//ImGui::SetTooltip(callee->alloc->str);
 			}
 			if (ImGui::BeginPopupContextItem("Options"))
 			{
 				if (ImGui::Selectable("Watch"))
 				{
-					createHistogram(caller->alloc);
+					createHistogram(callee->alloc);
 				}
 				if (ImGui::Selectable("Show callers"))
 				{
-					createHistogram(caller->alloc);
+					createHistogram(callee->alloc);
 				}
 				ImGui::EndPopup();
 			}
 			if (opened)
 			{
-				for (auto &to : caller->to)
-					displayCaller(to, depth + 1);
+				for (auto &to : callee->to)
+					displayCallee(to, depth + 1);
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
@@ -947,7 +972,7 @@ namespace LiveMemTracer
 				ImGui::SameLine();
 				ImGui::PushItemWidth(110.f);
 				ImGui::PushID(DisplayTypeStr);
-				ImGui::Combo("", (int*)&g_displayType, DisplayTypeStr, 3); ImGui::SameLine();
+				ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, 4); ImGui::SameLine();
 				ImGui::PopID();
 				ImGui::PopItemWidth();
 				ImGui::TextDisabled("(?)");
@@ -966,35 +991,50 @@ namespace LiveMemTracer
 					}
 				}
 
-				if (g_displayType == CALLER)
+				if (g_displayType == CALLEE)
 				{
 					ImGui::Separator();
 					ImGui::Text("Size"); ImGui::SameLine(150);
-					ImGui::Text("Caller");
+					ImGui::Text("Callee");
 					ImGui::Separator();
 					ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
-					Alloc *caller = g_searchResult;
-					while (caller)
+					Alloc *callee = g_searchResult;
+					while (callee)
 					{
-						if (!caller->edges)
-							break;
-						int64_t originalSize = caller->edges->lastCount;
-						Edge *edge = caller->edges;
-						while (edge->same)
+						if (!callee->edges)
 						{
-							caller->edges->lastCount += edge->same->lastCount;
+							callee = callee->next;
+							continue;
+						}
+						
+						ImGui::PushID(callee->str);
+						const char *suffix;
+						float size = formatMemoryString(callee->counter, suffix);
+						auto cursorPos = ImGui::GetCursorPos();
+						ImGui::Text("%f %s", size, suffix);
+						cursorPos.x += 150;
+						ImGui::SetCursorPos(cursorPos);
+						ImGui::Text("%s", callee->str);
+						ImGui::Separator();
+						Edge *edge = callee->edges;
+						while (edge)
+						{
+							displayCallee(edge, 0);
 							edge = edge->same;
 						}
-						caller->edges->lastCount = originalSize;
-						displayCaller(caller->edges, 0);
+						ImGui::PopID();
 						ImGui::Separator();
-						caller = caller->next;
+						callee = callee->next;
 					}
 					ImGui::EndChild();
 				}
 				else if (g_displayType == HISTOGRAMS)
 				{
 					updateHistograms();
+				}
+				else if (g_displayType == STACK)
+				{
+
 				}
 			}
 			ImGui::End();
