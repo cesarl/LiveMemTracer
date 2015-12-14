@@ -9,6 +9,7 @@
 #define LMT_DISPLAY(dt)do{}while(0)
 #define LMT_EXIT()do{}while(0)
 #define LMT_INIT()do{}while(0)
+#define LMT_FLUSH()do{}while(0)
 
 #else // LMT_ENABLED
 
@@ -20,6 +21,7 @@
 #define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
 #define LMT_EXIT() LiveMemTracer::exit()
 #define LMT_INIT() LiveMemTracer::init()
+#define LMT_FLUSH() LiveMemTracer::getChunk(true)
 
 #ifdef LMT_IMPL
 
@@ -242,7 +244,6 @@ namespace LiveMemTracer
 	__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
 	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
 	__declspec(thread) static bool                      g_th_initialized = false;
-	__declspec(thread) static size_t                    g_th_hitCount = 0;
 	__declspec(thread) static size_t                    g_th_recurseCounter = 0;
 
 
@@ -334,10 +335,10 @@ namespace LiveMemTracer
 		inline void display(float dt);
 	}
 
-	static inline bool chunkIsNotFull(const Chunk *chunk, const RunningStatus status);
+	static inline bool chunkIsNotFull(const Chunk *chunk);
 	static inline Chunk *createTemporaryChunk();
 	static inline Chunk *createPreallocatedChunk(const RunningStatus status);
-	static inline Chunk *getChunk();
+	static inline Chunk *getChunk(bool forceFlush = false);
 	static inline uint8_t findInCache(Hash hash);
 	static inline void logAllocInChunk(Header *header, size_t size);
 	static inline void logFreeInChunk(Header *header);
@@ -433,12 +434,11 @@ void LiveMemTracer::init()
 // IMPL ONLY : 
 //////////////////////////////////////////////////////////////////////////
 
-bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk, const RunningStatus status)
+bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 {
 	return (chunk
 		&& chunk->allocIndex < ALLOC_NUMBER_PER_CHUNK
-		&& chunk->stackIndex < ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC
-		&& ((status != RUNNING) || (g_th_hitCount < ALLOC_NUMBER_PER_CHUNK * 10)));
+		&& chunk->stackIndex < ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC);
 }
 
 LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
@@ -452,7 +452,6 @@ LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 	tmpChunk->allocIndex = 0;
 	tmpChunk->stackIndex = 0;
 	tmpChunk->status = TEMPORARY;
-	g_th_hitCount = 0;
 	return tmpChunk;
 }
 
@@ -481,7 +480,6 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 	memset(g_th_cache, 0, sizeof(g_th_cache));
 	chunk->allocIndex = 0;
 	chunk->stackIndex = 0;
-	g_th_hitCount = 0;
 	return chunk;
 }
 
@@ -497,7 +495,7 @@ struct RecurseCounter
 	}
 };
 
-LiveMemTracer::Chunk *LiveMemTracer::getChunk()
+LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 {
 	RecurseCounter recurseCounter;
 
@@ -517,7 +515,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 	if (status != RunningStatus::RUNNING)
 	{
 		// If current chunk is not full we use it
-		if (chunkIsNotFull(g_th_currentChunk, status))
+		if (chunkIsNotFull(g_th_currentChunk))
 		{
 			return g_th_currentChunk;
 		}
@@ -535,7 +533,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk()
 	else
 	{
 		// If current chunk is not full and treat current chunk time is not came
-		if (chunkIsNotFull(g_th_currentChunk, status))
+		if (forceFlush == false && chunkIsNotFull(g_th_currentChunk))
 		{
 			return g_th_currentChunk;
 		}
@@ -601,7 +599,6 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 
 	header->size = size;
 	header->hash = hash;
-	++g_th_hitCount;
 
 	size_t index = chunk->allocIndex;
 	uint8_t found = findInCache(hash);
@@ -628,7 +625,6 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 
 	size_t index = chunk->allocIndex;
 	uint8_t found = findInCache(header->hash);
-	++g_th_hitCount;
 	if (found != uint8_t(-1))
 	{
 		index = chunk->allocIndex - found - 1;
