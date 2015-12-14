@@ -12,12 +12,12 @@ static_assert(false, "LMT_PLATFORM_WINDOWS should be defined. Do not include thi
 #pragma comment(lib, "imagehlp.lib")
 #pragma comment(lib, "Shlwapi.lib")
 
-
-#define INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size, alignment, offset)_aligned_offset_malloc(size, alignment, offset)
-#define INTERNAL_LMT_DEALLOC_ALIGNED(ptr)_aligned_free(ptr)
+#define LMT_TLS __declspec(thread)
 
 namespace LiveMemTracer
 {
+	typedef void* StackInfo;
+
 	static inline uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash)
 	{
 		uint32_t count = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, maxStackSize, stack, (PDWORD)hash);

@@ -25,6 +25,18 @@
 
 #ifdef LMT_IMPL
 
+#ifndef LMT_USE_MALLOC
+#define LMT_USE_MALLOC(size) ::malloc(size)
+#endif
+
+#ifndef LMT_USE_REALLOC
+#define LMT_USE_REALLOC(ptr, size) ::realloc(ptr, size)
+#endif
+
+#ifndef LMT_USE_FREE
+#define LMT_USE_FREE(ptr) ::free(ptr)
+#endif
+
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 8
 #endif
@@ -77,6 +89,12 @@ static_assert(false, "LMT is already implemented, do not define LMT_IMPL more th
 static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
 #endif
 
+#if defined(LMT_PLATFORM_WINDOWS) 
+#define LMT_TLS __declspec(thread)
+#else
+#define LMT_TLS __thread
+#endif
+
 #include <atomic>     //std::atomic
 #include <cstdlib>    //malloc etc...
 #include <vector>
@@ -88,7 +106,6 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 
 namespace LiveMemTracer
 {
-
 	inline void *alloc(size_t size);
 	inline void *allocAligned(size_t size, size_t alignment);
 	inline void dealloc(void *ptr);
@@ -99,6 +116,32 @@ namespace LiveMemTracer
 	void display(float dt);
 
 #ifdef LMT_IMPL
+
+	#define LMT_IS_ALPHA(c) (((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z'))
+	#define LMT_TO_UPPER(c) ((c) & 0xDF)
+
+	inline char *LMT_STRSTRI(const char * str1, const char * str2)
+	{
+		char *copy = (char *)str1;
+		char *s1, *s2;
+		if (!*str2)
+			return (char *)str1;
+
+		while (*copy)
+		{
+			s1 = copy;
+			s2 = (char *)str2;
+
+			while ( *s1 && *s2 && (LMT_IS_ALPHA(*s1) && LMT_IS_ALPHA(*s2))?!(LMT_TO_UPPER(*s1) - LMT_TO_UPPER(*s2)):!(*s1-*s2))
+				++s1, ++s2;
+
+			if (!*s2)
+				return copy;
+
+			++copy;
+		}
+		return nullptr;
+	}
 
 	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
 	static const size_t STACK_SIZE_PER_ALLOC = LMT_STACK_SIZE_PER_ALLOC;
@@ -236,15 +279,13 @@ namespace LiveMemTracer
 		EXIT
 	};
 
-	static std::atomic<RunningStatus>                   g_runningStatus = NOT_INITIALIZED;
-
-	__declspec(thread) static Chunk                     *g_th_currentChunk = nullptr;
-	__declspec(thread) static Chunk                     g_th_chunks[CHUNK_NUMBER];
-	__declspec(thread) static uint8_t                   g_th_chunkIndex = 0;
-	__declspec(thread) static Hash                      g_th_cache[CACHE_SIZE];
-	__declspec(thread) static uint8_t                   g_th_cacheIndex = 0;
-	__declspec(thread) static bool                      g_th_initialized = false;
-	__declspec(thread) static size_t                    g_th_recurseCounter = 0;
+	LMT_TLS static Chunk                     *g_th_currentChunk = nullptr;
+	LMT_TLS static Chunk                     g_th_chunks[CHUNK_NUMBER];
+	LMT_TLS static uint8_t                   g_th_chunkIndex = 0;
+	LMT_TLS static Hash                      g_th_cache[CACHE_SIZE];
+	LMT_TLS static uint8_t                   g_th_cacheIndex = 0;
+	LMT_TLS static bool                      g_th_initialized = false;
+	LMT_TLS static size_t                    g_th_recurseCounter = 0;
 
 
 	static Alloc                                               *g_allocList = nullptr;
@@ -279,6 +320,14 @@ namespace LiveMemTracer
 #elif defined(LMT_PLATFORM_ORBIS)
 	{g_internalSharedMemoryUsed};
 #endif
+
+	static std::atomic<RunningStatus>                           g_runningStatus =
+#if defined(LMT_PLATFORM_WINDOWS)
+		RunningStatus::NOT_INITIALIZED;
+#elif defined(LMT_PLATFORM_ORBIS)
+		{RunningStatus::NOT_INITIALIZED};
+#endif
+
 
 	namespace Renderer
 	{
@@ -358,7 +407,7 @@ namespace LiveMemTracer
 
 void *LiveMemTracer::alloc(size_t size)
 {
-	void *ptr = malloc(size + HEADER_SIZE);
+	void *ptr = LMT_USE_MALLOC(size + HEADER_SIZE);
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(header, size);
 	return (void*)(size_t(ptr) + HEADER_SIZE);
@@ -366,10 +415,16 @@ void *LiveMemTracer::alloc(size_t size)
 
 void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
-	void *ptr = INTERNAL_LMT_ALLOC_ALIGNED_OFFSET(size + HEADER_SIZE, alignment, HEADER_SIZE);
-	Header *header = (Header*)(ptr);
+	if (size == 0)
+		return nullptr;
+	uintptr_t r = (uintptr_t)LMT_USE_MALLOC(size + --alignment + sizeof(uintptr_t) + HEADER_SIZE);
+	uintptr_t t = r + sizeof(uintptr_t) + HEADER_SIZE;
+	uintptr_t o =(t + alignment) & ~(uintptr_t)alignment;
+	if (!r) return NULL;
+	((uintptr_t*)o)[-3] = r;
+	Header* header = (Header*)(&(((uintptr_t*)o)[-2]));
 	logAllocInChunk(header, size);
-	return (void*)(size_t(ptr) + HEADER_SIZE);
+	return (void*)o;
 }
 
 void *LiveMemTracer::realloc(void *ptr, size_t size)
@@ -393,7 +448,7 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 	}
 
 	logFreeInChunk(header);
-	void *newPtr = ::realloc((void*)header, size + HEADER_SIZE);
+	void *newPtr = LMT_USE_REALLOC((void*)header, size + HEADER_SIZE);
 	header = (Header*)(newPtr);
 	logAllocInChunk(header, size);
 	return (void*)(size_t(newPtr) + HEADER_SIZE);
@@ -406,7 +461,7 @@ void LiveMemTracer::dealloc(void *ptr)
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
 	logFreeInChunk(header);
-	free(offset);
+	LMT_USE_FREE(offset);
 }
 
 void LiveMemTracer::deallocAligned(void *ptr)
@@ -416,7 +471,7 @@ void LiveMemTracer::deallocAligned(void *ptr)
 	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
 	Header *header = (Header*)(offset);
 	logFreeInChunk(header);
-	INTERNAL_LMT_DEALLOC_ALIGNED(offset);
+	LMT_USE_FREE(((void**)ptr)[-3]);
 }
 
 void LiveMemTracer::exit()
@@ -443,7 +498,7 @@ bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 
 LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 {
-	void *ptr = ::malloc(sizeof(Chunk));
+	void *ptr = LMT_USE_MALLOC(sizeof(Chunk));
 	memset(ptr, 0, sizeof(Chunk));
 	Chunk *tmpChunk = new(ptr)Chunk;
 
@@ -691,7 +746,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 				allocStack.stackAllocs[j] = &shared->getValue();
 				shared->getValue().counter += size;
 				if (name != TRUNCATED_STACK_NAME)
-					free((void*)name);
+					LMT_USE_FREE((void*)name);
 				continue;
 			}
 
@@ -708,7 +763,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	if (chunk->status == ChunkStatus::TEMPORARY)
 	{
 		chunk->~Chunk();
-		::free(chunk);
+		LMT_USE_FREE(chunk);
 	}
 	else
 	{
@@ -823,7 +878,7 @@ namespace LiveMemTracer
 			while (alloc != nullptr)
 			{
 				Alloc *next = alloc->next;
-				if (StrStrI(alloc->str, g_searchStr) != nullptr)
+				if (LMT_STRSTRI(alloc->str, g_searchStr) != nullptr)
 				{
 					*prevNext = alloc->next;
 					alloc->next = g_searchResult;
@@ -989,7 +1044,7 @@ namespace LiveMemTracer
 			while (it != std::end(g_histograms))
 			{
 				auto &h = *it;
-				if (g_searchStr[0] && StrStrI(h.name, g_searchStr) == nullptr)
+				if (g_searchStr[0] && LMT_STRSTRI(h.name, g_searchStr) == nullptr)
 				{
 					++it;
 					continue;
