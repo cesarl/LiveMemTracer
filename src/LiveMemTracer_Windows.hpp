@@ -36,28 +36,8 @@ namespace LiveMemTracer
 
 	namespace SymbolGetter
 	{
-		static int _initialized = 0;
-		static inline void init()
-		{
-			if (_initialized == false)
-			{
-				HANDLE hProcess;
-
-				SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-
-				hProcess = GetCurrentProcess();
-				if (!SymInitialize(hProcess, NULL, TRUE))
-				{
-					LMT_ASSERT(false, "SymInitialize failed.");
-				}
-				_initialized = true;
-			}
-		}
-
 		static inline const char *getSymbol(void *ptr, void *& absoluteAddress)
 		{
-			init();
-
 			DWORD64 dwDisplacement = 0;
 			DWORD64 dwAddress = DWORD64(ptr);
 			HANDLE hProcess = GetCurrentProcess();
@@ -75,6 +55,19 @@ namespace LiveMemTracer
 			absoluteAddress = (void*)(DWORD64(ptr) - dwDisplacement);
 			return _strdup(pSymbol->Name);
 		}
+	}
+}
+
+void LiveMemTracer::SymbolGetter::init()
+{
+	HANDLE hProcess;
+
+	SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+
+	hProcess = GetCurrentProcess();
+	if (!SymInitialize(hProcess, NULL, TRUE))
+	{
+		LMT_ASSERT(false, "SymInitialize failed.");
 	}
 }
 

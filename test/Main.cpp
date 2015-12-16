@@ -65,6 +65,9 @@ static WorkerThread g_workerThread;
 #define LMT_IMPL 1
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
+#define LMT_USE_MALLOC ::malloc
+#define LMT_USE_REALLOC ::realloc
+#define LMT_USE_FREE ::free
 
 //#define SINGLE_THREADED 1
 
