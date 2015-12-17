@@ -195,7 +195,9 @@ namespace LiveMemTracer
 		uint64_t  size : 63;
 		uint64_t  aligned : 1;
 	};
+
 	static const size_t HEADER_SIZE = sizeof(Header);
+	static const size_t ALIGNED_HEADER_SIZE = sizeof(size_t) + sizeof(Header);
 
 	enum ChunkStatus
 	{
@@ -430,6 +432,20 @@ namespace LiveMemTracer
 #endif
 
 #ifdef LMT_IMPL
+namespace LiveMemTracer
+{
+#define GET_HEADER(ptr) (Header*)((void*)((size_t)ptr - HEADER_SIZE))
+#define GET_ALIGNED_PTR(ptr) (void*)(*(size_t*)((void*)(size_t(ptr) - (HEADER_SIZE + sizeof(size_t)))))
+#define GET_ALIGNED_SIZE(size, alignment) size + --alignment + ALIGNED_HEADER_SIZE
+	static inline void *REGISTER_ALIGNED_PTR(void *ptr, size_t alignment)
+	{
+		size_t t = (size_t)ptr + ALIGNED_HEADER_SIZE;
+		size_t o = (t + alignment) & ~(size_t)alignment;
+		size_t *addrPtr = (size_t*)((void*)(o - ALIGNED_HEADER_SIZE));
+		*addrPtr = (size_t)ptr;
+		return (void*)o;
+	}
+}
 
 void *LiveMemTracer::alloc(size_t size)
 {
@@ -444,15 +460,12 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
 	if (size == 0)
 		return nullptr;
-	size_t allocatedSize = size + --alignment + sizeof(size_t) + HEADER_SIZE;
-	size_t r = (size_t)LMT_USE_MALLOC(allocatedSize);
-	size_t t = r + sizeof(size_t) + HEADER_SIZE;
-	size_t o = (t + alignment) & ~(size_t)alignment;
+	size_t allocatedSize = GET_ALIGNED_SIZE(size, alignment);
+	void* r = LMT_USE_MALLOC(allocatedSize);
+	void* o = REGISTER_ALIGNED_PTR(r, alignment);
 	if (!r) return NULL;
 
-	size_t *addrPtr = (size_t*)((void*)(o - (sizeof(size_t) + sizeof(Header))));
-	*addrPtr = r;
-	Header* header = (Header*)((void*)(o - HEADER_SIZE));
+	Header* header = GET_HEADER(o);
 	logAllocInChunk(header, size);
 	header->aligned = 1;
 	return (void*)o;
@@ -470,8 +483,7 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 		return nullptr;
 	}
 
-	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
-	Header *header = (Header*)(offset);
+	Header *header = GET_HEADER(ptr);
 
 	if (size == header->size)
 	{
@@ -493,60 +505,50 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 		return allocAligned(size, alignment);
 	}
 
-	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
-	Header *header = (Header*)(offset);
+	Header oldHeader = *GET_HEADER(ptr);
 
 	if (size == 0)
 	{
-		if (header->aligned == 1)
-			deallocAligned(ptr);
-		else
-			dealloc(ptr);
+		deallocAligned(ptr);
 		return nullptr;
 	}
 
-	if (size == header->size && header->aligned == 1)
+	if (size == oldHeader.size)
 	{
 		return ptr;
 	}
 
-	void *newPtr = allocAligned(size, alignment);
-	size_t sizeToCopy = header->size < size ? header->size : size;
-	memcpy(newPtr, ptr, sizeToCopy);
-	logAllocInChunk(header, size);
-	deallocAligned(ptr);
-	return newPtr;
+	size_t reallocSize = GET_ALIGNED_SIZE(size, alignment);
+	void* r = LMT_USE_REALLOC(GET_ALIGNED_PTR(ptr), reallocSize);
+	if (!r) return NULL;
+	void* o = REGISTER_ALIGNED_PTR(r, alignment);
+
+	Header *newHeader = GET_HEADER(o);
+	logAllocInChunk(newHeader, size);
+	newHeader->aligned = 1;
+	newHeader->size = size;
+	logFreeInChunk(&oldHeader);
+	return o;
 }
 
 void LiveMemTracer::dealloc(void *ptr)
 {
 	if (ptr == nullptr)
 		return;
-	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
-	Header *header = (Header*)(offset);
-	if (header->aligned == 1)
-	{
-		deallocAligned(ptr);
-		return;
-	}
+	Header *header = GET_HEADER(ptr);
+	LMT_DEBUG_ASSERT(header->aligned == 0, "Trying to free an aligned ptr with a non-aligned free");
 	logFreeInChunk(header);
-	LMT_USE_FREE(offset);
+	LMT_USE_FREE((void*)header);
 }
 
 void LiveMemTracer::deallocAligned(void *ptr)
 {
 	if (ptr == nullptr)
 		return;
-	void* offset = (void*)(size_t(ptr) - HEADER_SIZE);
-	Header *header = (Header*)(offset);
-	if (header->aligned == 0)
-	{
-		dealloc(ptr);
-		return;
-	}
+	Header *header = GET_HEADER(ptr);
+	LMT_DEBUG_ASSERT(header->aligned == 1, "Trying to free an non-aligned ptr with an aligned free");
 	logFreeInChunk(header);
-	size_t *toDelete = (size_t*)((void*)(size_t(ptr) - (HEADER_SIZE + sizeof(size_t))));
-	LMT_USE_FREE((void*)(*toDelete));
+	LMT_USE_FREE(GET_ALIGNED_PTR(ptr));
 }
 
 void LiveMemTracer::exit()
