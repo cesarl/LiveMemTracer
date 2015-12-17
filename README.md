@@ -32,7 +32,7 @@ Using it
 --------
 
 Define LiveMemTracer settings :
-
+```cpp
     // Number of allocs register per chunks
     // Adapt it to the number of allocations your program do
     // ( default : 1024 * 8 )
@@ -84,14 +84,18 @@ Define LiveMemTracer settings :
     // You can override it and ask to LMT to do the job differently.
     // Example :
     #define LMT_TREAT_CHUNK(chunk) MyTaskScheduler::getInstancer().pushTask([=](){LiveMemTracer::treatChunk(chunk);})
+```
 
 In one `.cpp`, declare IMPL and include "LiveMemTracer.hpp" :
 
+```cpp
     #define LMT_IMPL 1
     #include "../Src/LiveMemTracer.hpp"
+```
 
 In your main function :
 
+```cpp
     int main(int ac, char **av)
     {
         LMT_INIT_SYMBOLS();
@@ -100,11 +104,13 @@ In your main function :
         LMT_EXIT();
         return EXIT_SUCCESS;
     }
+```
 
 If you want to enable LiveMemTracer, add `LMT_ENABLED` to your pre-processor variables. If not, it'll be totally deactivated.
 
 Finally, used LMT macros for your allocations :
 
+```cpp
     #define MY_MALLOC(size) LMT_ALLOC(size)
     #define MY_FREE(ptr) LMT_DEALLOC(ptr)
     #define MY_REALLOC(ptr, size) LMT_REALLOC(ptr, size)
@@ -120,6 +126,7 @@ Finally, used LMT macros for your allocations :
     ...
     ...
     ...
+```
 
 Note :
 
