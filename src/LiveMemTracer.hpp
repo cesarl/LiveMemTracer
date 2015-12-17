@@ -21,16 +21,16 @@
 
 #else // LMT_ENABLED
 
-#define LMT_ALLOC(size)LiveMemTracer::alloc(size)
-#define LMT_ALLOC_ALIGNED(size, alignment)LiveMemTracer::allocAligned(size, alignment)
-#define LMT_DEALLOC(ptr)LiveMemTracer::dealloc(ptr)
-#define LMT_DEALLOC_ALIGNED(ptr)LiveMemTracer::deallocAligned(ptr)
-#define LMT_REALLOC(ptr, size)LiveMemTracer::realloc(ptr, size)
-#define LMT_REALLOC_ALIGNED(ptr, size, alignment)LiveMemTracer::reallocAligned(ptr, size, alignment)
-#define LMT_DISPLAY(dt)LiveMemTracer::display(dt)
-#define LMT_EXIT() LiveMemTracer::exit()
-#define LMT_INIT() LiveMemTracer::init()
-#define LMT_FLUSH() LiveMemTracer::getChunk(true)
+#define LMT_ALLOC(size)::LiveMemTracer::alloc(size)
+#define LMT_ALLOC_ALIGNED(size, alignment)::LiveMemTracer::allocAligned(size, alignment)
+#define LMT_DEALLOC(ptr)::LiveMemTracer::dealloc(ptr)
+#define LMT_DEALLOC_ALIGNED(ptr)::LiveMemTracer::deallocAligned(ptr)
+#define LMT_REALLOC(ptr, size)::LiveMemTracer::realloc(ptr, size)
+#define LMT_REALLOC_ALIGNED(ptr, size, alignment)::LiveMemTracer::reallocAligned(ptr, size, alignment)
+#define LMT_DISPLAY(dt)::LiveMemTracer::display(dt)
+#define LMT_EXIT()::LiveMemTracer::exit()
+#define LMT_INIT()::LiveMemTracer::init()
+#define LMT_FLUSH()::LiveMemTracer::getChunk(true)
 
 #ifdef LMT_PLATFORM_WINDOWS
 #define LMT_INIT_SYMBOLS(arg) ::LiveMemTracer::SymbolGetter::init()
@@ -130,6 +130,9 @@ namespace LiveMemTracer
 	void exit();
 	void init();
 	void display(float dt);
+	struct Chunk;
+	LMT_INLINE Chunk *getChunk(bool forceFlush = false);
+
 	namespace SymbolGetter
 	{
 #if defined LMT_PLATFORM_ORBIS
@@ -424,7 +427,6 @@ namespace LiveMemTracer
 	static LMT_INLINE bool chunkIsNotFull(const Chunk *chunk);
 	static LMT_INLINE Chunk *createTemporaryChunk();
 	static LMT_INLINE Chunk *createPreallocatedChunk(const RunningStatus status);
-	static LMT_INLINE Chunk *getChunk(bool forceFlush = false);
 	static LMT_INLINE uint8_t findInCache(Hash hash);
 	static LMT_INLINE void logAllocInChunk(Header *header, size_t size);
 	static LMT_INLINE void logFreeInChunk(Header *header);
