@@ -59,16 +59,16 @@ static WorkerThread g_workerThread;
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 2
-#define LMT_CACHE_SIZE 3
+#define LMT_CACHE_SIZE 8
 #define LMT_PLATFORM_WINDOWS 1
 #define LMT_DEBUG_DEV 1
-#define LMT_IMPL 1
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
 #define LMT_USE_MALLOC ::malloc
 #define LMT_USE_REALLOC ::realloc
 #define LMT_USE_FREE ::free
 
+#define LMT_IMPL 1
 //#define SINGLE_THREADED 1
 
 #if defined(SINGLE_THREADED)
