@@ -50,9 +50,6 @@ Define LiveMemTracer settings :
     // ( default : 16 )
     #define LMT_CACHE_SIZE 8
 
-    // Platform (LMT_PLATFORM_ORBIS for PS4)
-    #define LMT_PLATFORM_WINDOWS 1
-
     // Will assert one errors, example if Dictionnary is full
     #define LMT_DEBUG_DEV 1
 
