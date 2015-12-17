@@ -115,6 +115,8 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 #define LMT_INLINE
 #endif
 
+#include <stdint.h>
+
 namespace LiveMemTracer
 {
 	typedef uint64_t Hash;
@@ -631,12 +633,6 @@ struct RecurseCounter
 LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 {
 	RecurseCounter recurseCounter;
-
-	static size_t limit = 3;
-	if (g_th_recurseCounter >= limit)
-	{
-		int i = limit + g_th_recurseCounter;
-	}
 
 	Chunk *currentChunk = nullptr;
 	const RunningStatus status = g_runningStatus;

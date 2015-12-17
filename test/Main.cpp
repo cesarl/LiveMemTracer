@@ -59,7 +59,7 @@ static WorkerThread g_workerThread;
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 2
-#define LMT_CACHE_SIZE 16
+#define LMT_CACHE_SIZE 3
 #define LMT_PLATFORM_WINDOWS 1
 #define LMT_DEBUG_DEV 1
 #define LMT_IMPL 1
@@ -80,7 +80,6 @@ static WorkerThread g_workerThread;
 #include "../Src/LiveMemTracer.hpp"
 
 #include <vector>
-#define OVERRIDE_NEW 1
 
 #include LMT_IMGUI_INCLUDE_PATH
 #include "External/GL/gl3w.h"
@@ -93,6 +92,8 @@ static void error_callback(int error, const char* description)
 {
 	fprintf(stderr, "Error %d: %s\n", error, description);
 }
+
+#define OVERRIDE_NEW 1
 
 #if defined(OVERRIDE_NEW)
 //////////////////////////////////////////////////////////////////////////
