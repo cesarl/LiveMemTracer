@@ -444,12 +444,14 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
 	if (size == 0)
 		return nullptr;
-	size_t allocatedSize = size + --alignment + sizeof(uintptr_t) + HEADER_SIZE;
-	uintptr_t r = (uintptr_t)LMT_USE_MALLOC(allocatedSize);
-	uintptr_t t = r + sizeof(uintptr_t) + HEADER_SIZE;
-	uintptr_t o = (t + alignment) & ~(uintptr_t)alignment;
+	size_t allocatedSize = size + --alignment + sizeof(size_t) + HEADER_SIZE;
+	size_t r = (size_t)LMT_USE_MALLOC(allocatedSize);
+	size_t t = r + sizeof(size_t) + HEADER_SIZE;
+	size_t o = (t + alignment) & ~(size_t)alignment;
 	if (!r) return NULL;
-	((uintptr_t*)o)[-3] = r;
+
+	size_t *addrPtr = (size_t*)((void*)(o - (sizeof(size_t) + sizeof(Header))));
+	*addrPtr = r;
 	Header* header = (Header*)((void*)(o - HEADER_SIZE));
 	logAllocInChunk(header, size);
 	header->aligned = 1;
@@ -509,7 +511,8 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 	}
 
 	void *newPtr = allocAligned(size, alignment);
-	memcpy(newPtr, ptr, header->size);
+	size_t sizeToCopy = header->size < size ? header->size : size;
+	memcpy(newPtr, ptr, sizeToCopy);
 	logAllocInChunk(header, size);
 	deallocAligned(ptr);
 	return newPtr;
@@ -542,8 +545,8 @@ void LiveMemTracer::deallocAligned(void *ptr)
 		return;
 	}
 	logFreeInChunk(header);
-	void *toDelete = (void*)(size_t(ptr) - (HEADER_SIZE + sizeof(uintptr_t)));
-	LMT_USE_FREE(toDelete);
+	size_t *toDelete = (size_t*)((void*)(size_t(ptr) - (HEADER_SIZE + sizeof(size_t))));
+	LMT_USE_FREE((void*)(*toDelete));
 }
 
 void LiveMemTracer::exit()
