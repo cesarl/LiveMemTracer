@@ -60,7 +60,6 @@ static WorkerThread g_workerThread;
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 2
 #define LMT_CACHE_SIZE 8
-#define LMT_PLATFORM_WINDOWS 1
 #define LMT_DEBUG_DEV 1
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
