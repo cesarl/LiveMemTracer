@@ -56,10 +56,10 @@ private:
 static WorkerThread g_workerThread;
 
 #define LMT_ENABLED 1
-#define LMT_ALLOC_NUMBER_PER_CHUNK 1024
+#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 4
 #define LMT_STACK_SIZE_PER_ALLOC 50
-#define LMT_CHUNK_NUMBER_PER_THREAD 2
-#define LMT_CACHE_SIZE 8
+#define LMT_CHUNK_NUMBER_PER_THREAD 4
+#define LMT_CACHE_SIZE 16
 #define LMT_DEBUG_DEV 1
 #define LMT_IMGUI 1
 #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
@@ -103,7 +103,7 @@ void *myMalloc(size_t size)
 
 void myFree(void *ptr)
 {
-	return LMT_DEALLOC(ptr);
+	LMT_DEALLOC(ptr);
 }
 
 void *myRealloc(void *ptr, size_t size)
@@ -113,82 +113,82 @@ void *myRealloc(void *ptr, size_t size)
 
 void* operator new(size_t count) throw(std::bad_alloc)
 {
-	return myMalloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new(size_t count, const std::nothrow_t&) throw()
 {
-	return myMalloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new(size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return myMalloc(count);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new(size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return myMalloc(count);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new[](size_t count) throw(std::bad_alloc)
 {
-	return myMalloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new[](size_t count, const std::nothrow_t&) throw()
 {
-	return myMalloc(count);
+	return LMT_ALLOC(count);
 }
 
 void* operator new[](size_t count, size_t alignment) throw(std::bad_alloc)
 {
-	return myMalloc(count);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void* operator new[](size_t count, size_t alignment, const std::nothrow_t&) throw()
 {
-	return myMalloc(count);
+	return LMT_ALLOC_ALIGNED(count, alignment);
 }
 
 void operator delete(void* ptr) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete(void *ptr, const std::nothrow_t&) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete(void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete[](void* ptr) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete[](void *ptr, const std::nothrow_t&) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 
 void operator delete[](void *ptr, size_t alignment, const std::nothrow_t&) throw()
 {
-	return myFree(ptr);
+	return LMT_DEALLOC_ALIGNED(ptr);
 }
 //////////////////////////////////////////////////////////////////////////
 #else
@@ -258,11 +258,11 @@ struct Tata
 	{
 		a = conditionalTiti(true);
 		b = conditionalTiti(false);
-		v = myMalloc(12);
+		v = LMT_ALLOC(128);
 	}
 	~Tata()
 	{
-		myFree(v);
+		LMT_DEALLOC(v);
 		delete a;
 		delete b;
 	}
@@ -297,43 +297,6 @@ int main(int ac, char **av)
 {
 	LMT_INIT_SYMBOLS();
 	LMT_INIT();
-
-	for (int j = 0; j < 50000; ++j)
-	{
-		size_t size1 = rand() % 1013;
-		if (size1 == 0) size1 = 1;
-		auto c = (char*)LMT_ALLOC_ALIGNED(sizeof(char) * size1, 16);
-		for (int i = 0; i < size1; ++i)
-		{
-			c[i] = char(i % 128);
-		}
-		size_t size2 = rand() % 10133;
-		if (size2 == 0) size2 = 1;
-		int* cc = (int*)LMT_REALLOC_ALIGNED(c, sizeof(int) * size2, 16);
-		for (int i = 0; i < size2; ++i)
-		{
-			cc[i] = int(i);
-		}
-
-		struct Prout
-		{
-			int a[3];
-			char b[2];
-			bool c[31];
-		};
-
-		size_t size3 = rand() % 101331;
-		if (size3 == 0) size3 = 1;
-		Prout* ccc = (Prout*)LMT_REALLOC_ALIGNED(cc, sizeof(Prout) * size3, 16);
-		for (int i = 0; i < size3; ++i)
-		{
-			ccc[i] = Prout();
-			ccc[i].a[2] = i;
-			ccc[i].b[1] = 'd';
-			ccc[i].c[30] = false;
-		}
-		LMT_DEALLOC_ALIGNED(ccc);
-	}
 
 	// Setup window
 	glfwSetErrorCallback(error_callback);
@@ -403,8 +366,6 @@ int main(int ac, char **av)
 			totoVector.clear();
 			clearCounter = 0;
 		}
-
-
 
 		LMT_DISPLAY(dt);
 		ImGui::ShowTestWindow();

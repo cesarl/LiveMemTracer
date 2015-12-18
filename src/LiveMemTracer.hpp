@@ -368,6 +368,13 @@ namespace LiveMemTracer
 	{RunningStatus::NOT_INITIALIZED};
 #endif
 
+	static std::atomic_size_t                                   g_temporaryChunkCounter =
+#if defined(LMT_PLATFORM_WINDOWS)
+		0;
+#elif defined(LMT_PLATFORM_ORBIS)
+	{0};
+#endif
+
 
 	namespace Renderer
 	{
@@ -588,6 +595,7 @@ LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 	tmpChunk->allocIndex = 0;
 	tmpChunk->stackIndex = 0;
 	tmpChunk->status = TEMPORARY;
+	g_temporaryChunkCounter.fetch_add(1);
 	return tmpChunk;
 }
 
@@ -683,7 +691,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 		}
 		g_th_currentChunk = createPreallocatedChunk(status);
 		// And treat old chunk
-		if (g_th_currentChunk && oldChunk && g_th_recurseCounter < 2)
+		if (g_th_currentChunk && oldChunk)
 		{
 			LMT_TREAT_CHUNK(oldChunk);
 		}
@@ -695,7 +703,7 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 		// Else we create a temporary one
 		g_th_currentChunk = createTemporaryChunk();
 
-		if (g_th_currentChunk && oldChunk && g_th_recurseCounter < 2)
+		if (g_th_currentChunk && oldChunk)
 		{
 			LMT_TREAT_CHUNK(oldChunk);
 		}
@@ -848,6 +856,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	{
 		chunk->~Chunk();
 		LMT_USE_FREE(chunk);
+		g_temporaryChunkCounter.fetch_sub(1);
 	}
 	else
 	{
@@ -1272,6 +1281,12 @@ namespace LiveMemTracer
 						g_updateSearch = true;
 					}
 				}
+				size_t temporaryChunk = g_temporaryChunkCounter;
+				if (temporaryChunk > 0)
+				{
+					ImGui::SameLine();
+					ImGui::TextColored(ImColor(1.f, 0.f, 0.f), "Temporary chunks : %i", temporaryChunk);
+				}
 				ImGui::SameLine();
 				ImGui::TextDisabled("(?)");
 				ImGui::PopItemWidth();
@@ -1343,7 +1358,6 @@ namespace LiveMemTracer
 
 void LiveMemTracer::display(float dt)
 {
-	RecurseCounter recurseCounter;
 	Renderer::render(dt);
 }
 #else
