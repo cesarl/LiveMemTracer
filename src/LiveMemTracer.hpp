@@ -294,18 +294,43 @@ namespace LiveMemTracer
 			}
 			return pair;
 		}
+
+#ifdef LMT_DICTIONARY_STATS
+		float getHitStats() const
+		{
+			size_t total = _hitTotal;
+			size_t count = _hitCount;
+			return _hitTotal / float(_hitCount);
+		}
+#endif
 	private:
 		Pair _buffer[Capacity];
 		size_t _size;
 		static const size_t HASH_MODIFIER = 7;
+#ifdef LMT_DICTIONARY_STATS
+		mutable std::atomic_size_t _hitCount;
+		mutable std::atomic_size_t _hitTotal;
+#endif
 
 		LMT_INLINE size_t getHash(Key key) const
 		{
+#ifdef LMT_DICTIONARY_STATS
+			size_t hits = 0;
+#endif
 			for (size_t i = 0; i < Capacity; ++i)
 			{
+#ifdef LMT_DICTIONARY_STATS
+				++hits;
+#endif
 				const size_t realHash = (key * HASH_MODIFIER + i) % Capacity;
 				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
+				{
+#ifdef LMT_DICTIONARY_STATS
+					_hitCount += 1;
+					_hitTotal += hits;
+#endif
 					return realHash;
+				}
 			}
 			LMT_ASSERT(false, "Dictionary is full or quadratic probing reach it's limits.");
 			return HASH_INVALID;
@@ -446,16 +471,19 @@ namespace LiveMemTracer
 namespace LiveMemTracer
 {
 #define GET_HEADER(ptr) (Header*)((void*)((size_t)ptr - HEADER_SIZE))
-#define GET_ALIGNED_PTR(ptr) (void*)(*(size_t*)((void*)(size_t(ptr) - (HEADER_SIZE + sizeof(size_t)))))
+#define GET_ALIGNED_PTR(ptr) (void*)(*(size_t*)((void*)(size_t(ptr) - ALIGNED_HEADER_SIZE)))
 #define GET_ALIGNED_SIZE(size, alignment) size + --alignment + ALIGNED_HEADER_SIZE
 	static inline void *REGISTER_ALIGNED_PTR(void *ptr, size_t alignment)
 	{
 		size_t t = (size_t)ptr + ALIGNED_HEADER_SIZE;
-		size_t o = (t + alignment) & ~(size_t)alignment;
+		size_t o = (t + alignment) & ~alignment;
 		size_t *addrPtr = (size_t*)((void*)(o - ALIGNED_HEADER_SIZE));
 		*addrPtr = (size_t)ptr;
+		LMT_ASSERT(o > (size_t)ptr, "Fuck it");
 		return (void*)o;
 	}
+#define IS_ALIGNED(POINTER, BYTE_COUNT) \
+	(((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
 }
 
 void *LiveMemTracer::alloc(size_t size)
@@ -469,16 +497,22 @@ void *LiveMemTracer::alloc(size_t size)
 
 void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 {
-	if (size == 0)
-		return nullptr;
+	if (alignment < 8)
+	{
+		alignment = 8;
+	}
+
 	size_t allocatedSize = GET_ALIGNED_SIZE(size, alignment);
 	void* r = LMT_USE_MALLOC(allocatedSize);
+	if (!r)
+		return nullptr;
 	void* o = REGISTER_ALIGNED_PTR(r, alignment);
-	if (!r) return NULL;
 
 	Header* header = GET_HEADER(o);
 	logAllocInChunk(header, size);
 	header->aligned = 1;
+	LMT_ASSERT(IS_ALIGNED(o, alignment + 1), "Not aligned");
+	LMT_ASSERT(o != nullptr, "");
 	return (void*)o;
 }
 
@@ -488,13 +522,14 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 	{
 		return alloc(size);
 	}
+
+	Header *header = GET_HEADER(ptr);
+
 	if (size == 0)
 	{
 		dealloc(ptr);
-		return nullptr;
+		return alloc(0);
 	}
-
-	Header *header = GET_HEADER(ptr);
 
 	if (size == header->size)
 	{
@@ -521,16 +556,24 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 	if (size == 0)
 	{
 		deallocAligned(ptr);
-		return nullptr;
+		return allocAligned(0, alignment);
 	}
 
 	if (size == oldHeader.size)
 	{
 		return ptr;
 	}
-
-	size_t reallocSize = GET_ALIGNED_SIZE(size, alignment);
-	void* r = LMT_USE_REALLOC(GET_ALIGNED_PTR(ptr), reallocSize);
+	LMT_ASSERT(oldHeader.aligned == 1, "");
+	LMT_ASSERT(IS_ALIGNED(ptr, alignment), "");
+	void *newPtr = allocAligned(size, alignment);
+	memcpy(newPtr, ptr, oldHeader.size < size ? oldHeader.size : size);
+	deallocAligned(ptr);
+	LMT_ASSERT(IS_ALIGNED(newPtr, alignment), "");
+	LMT_ASSERT(newPtr != nullptr, "");
+	return newPtr;
+	/*size_t reallocSize = GET_ALIGNED_SIZE(size, alignment);
+	void *alignedPtr = GET_ALIGNED_PTR(ptr);
+	void* r = LMT_USE_REALLOC(alignedPtr, reallocSize);
 	if (!r) return NULL;
 	void* o = REGISTER_ALIGNED_PTR(r, alignment);
 
@@ -539,7 +582,7 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 	newHeader->aligned = 1;
 	newHeader->size = size;
 	logFreeInChunk(&oldHeader);
-	return o;
+	return o;*/
 }
 
 void LiveMemTracer::dealloc(void *ptr)
@@ -1269,10 +1312,6 @@ namespace LiveMemTracer
 					ImGui::SameLine();
 					g_refresh = ImGui::Button("Refresh");
 				}
-				if (ImGui::IsItemHovered())
-				{
-					ImGui::SetTooltip("Memory used by LMT : %06f Mo", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
-				}
 				if (g_displayType != DisplayType::STACK)
 				{
 					ImGui::SameLine();
@@ -1289,6 +1328,15 @@ namespace LiveMemTracer
 				}
 				ImGui::SameLine();
 				ImGui::TextDisabled("(?)");
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+				}
+#ifdef LMT_DICTIONARY_STATS
+				ImGui::SameLine();
+				ImGui::Text("allocStackRefTable %f | allocRefTable %f | tree %f", g_allocStackRefTable.getHitStats()
+					, g_allocRefTable.getHitStats(), g_tree.getHitStats());
+#endif
 				ImGui::PopItemWidth();
 				ImGui::EndMenuBar();
 			}

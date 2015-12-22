@@ -298,6 +298,50 @@ int main(int ac, char **av)
 	LMT_INIT_SYMBOLS();
 	LMT_INIT();
 
+	for (int j = 0; j < 500; ++j)
+	{
+		void *f = nullptr;
+
+		size_t size1 = rand() % 1013;
+		if (size1 == 0) size1 = 1;
+		auto c = (char*)LMT_ALLOC_ALIGNED(sizeof(char) * size1, 16);
+		for (int i = 0; i < size1; ++i)
+		{
+			c[i] = char(i % 128);
+		}
+		for (int a = 0; a < 10; ++a)
+		{
+			size_t size2 = rand() % 10133;
+			if (size2 == 0) size2 = 1;
+			int* cc = (int*)LMT_REALLOC_ALIGNED(c, sizeof(int) * size2, 16);
+			for (int i = 0; i < size2; ++i)
+			{
+				cc[i] = int(i);
+			}
+
+			struct Prout
+			{
+				int a[3];
+				char b[2];
+				bool c[31];
+			};
+
+			size_t size3 = rand() % 101331;
+			if (size3 == 0) size3 = 1;
+			Prout* ccc = (Prout*)LMT_REALLOC_ALIGNED(cc, sizeof(Prout) * size3, 16);
+			for (int i = 0; i < size3; ++i)
+			{
+				ccc[i] = Prout();
+				ccc[i].a[2] = i;
+				ccc[i].b[1] = 'd';
+				ccc[i].c[30] = false;
+			}
+			f = ccc;
+			c = (char*)ccc;
+		}
+		LMT_DEALLOC_ALIGNED(f);
+	}
+
 	// Setup window
 	glfwSetErrorCallback(error_callback);
 	if (!glfwInit())
