@@ -56,7 +56,9 @@ private:
 static WorkerThread g_workerThread;
 
 #define LMT_ENABLED 1
-#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 4
+#define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 16
+#define LMT_ALLOC_DICTIONARY_SIZE 1024 * 16 * 16
+#define LMT_STACK_DICTIONARY_SIZE 1024 * 16 * 8
 #define LMT_STACK_SIZE_PER_ALLOC 50
 #define LMT_CHUNK_NUMBER_PER_THREAD 4
 #define LMT_CACHE_SIZE 16
@@ -66,6 +68,8 @@ static WorkerThread g_workerThread;
 #define LMT_USE_MALLOC ::malloc
 #define LMT_USE_REALLOC ::realloc
 #define LMT_USE_FREE ::free
+
+#define LMT_DICTIONARY_STATS 1
 
 #define LMT_IMPL 1
 //#define SINGLE_THREADED 1

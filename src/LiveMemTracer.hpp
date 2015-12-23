@@ -109,7 +109,8 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 #undef LMT_TLS
 #undef LMT_INLINE
 #define LMT_TLS __thread
-#define LMT_INLINE __attribute__((__always_inline__))
+// __attribute__((__always_inline__))
+#define LMT_INLINE
 #else
 #define LMT_TLS
 #define LMT_INLINE
@@ -119,7 +120,7 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 
 namespace LiveMemTracer
 {
-	typedef uint64_t Hash;
+	typedef size_t Hash;
 
 	LMT_INLINE void *alloc(size_t size);
 	LMT_INLINE void *allocAligned(size_t size, size_t alignment);
@@ -154,7 +155,7 @@ namespace LiveMemTracer
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 	static const char  *UNKNOWN_STACK_NAME = "Unknown\0";
 	static const size_t HISTORY_FRAME_NUMBER = 120;
-	template <class T> inline size_t combineHash(const T& val, const size_t baseHash = 14695981039346656037ULL);
+	template <class T> inline size_t combineHash(const T& val, const size_t baseHash = 2166136261U);
 	static LMT_INLINE uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash);
 #endif
 }
@@ -280,7 +281,7 @@ namespace LiveMemTracer
 			friend class Dictionary;
 		};
 
-		Pair *update(const Key &key)
+		LMT_INLINE Pair *update(const Key &key)
 		{
 			const size_t hash = getHash(key);
 			LMT_DEBUG_ASSERT(hash != HASH_INVALID, "This slot is already used.");
@@ -290,44 +291,46 @@ namespace LiveMemTracer
 			{
 				pair->hash = hash;
 				pair->key = key;
-				++_size;
+#ifdef LMT_DICTIONARY_STATS
+				_size.fetch_add(1);
+#endif
 			}
 			return pair;
 		}
 
 #ifdef LMT_DICTIONARY_STATS
-		float getHitStats() const
+		LMT_INLINE float getHitStats() const
 		{
 			size_t total = _hitTotal;
 			size_t count = _hitCount;
 			return _hitTotal / float(_hitCount);
 		}
+
+		LMT_INLINE float getRatio() const
+		{
+			size_t size = _size;
+			return size / float(Capacity) * 100.f;
+		}
 #endif
 	private:
 		Pair _buffer[Capacity];
-		size_t _size;
 		static const size_t HASH_MODIFIER = 7;
 #ifdef LMT_DICTIONARY_STATS
 		mutable std::atomic_size_t _hitCount;
 		mutable std::atomic_size_t _hitTotal;
+		mutable std::atomic_size_t _size;
 #endif
 
 		LMT_INLINE size_t getHash(Key key) const
 		{
-#ifdef LMT_DICTIONARY_STATS
-			size_t hits = 0;
-#endif
 			for (size_t i = 0; i < Capacity; ++i)
 			{
-#ifdef LMT_DICTIONARY_STATS
-				++hits;
-#endif
-				const size_t realHash = (key * HASH_MODIFIER + i) % Capacity;
+				const size_t realHash = (key + i) % Capacity;
 				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
 				{
 #ifdef LMT_DICTIONARY_STATS
 					_hitCount += 1;
-					_hitTotal += hits;
+					_hitTotal += i;
 #endif
 					return realHash;
 				}
@@ -462,7 +465,7 @@ namespace LiveMemTracer
 	static LMT_INLINE uint8_t findInCache(Hash hash);
 	static LMT_INLINE void logAllocInChunk(Header *header, size_t size);
 	static LMT_INLINE void logFreeInChunk(Header *header);
-	static void treatChunk(Chunk *chunk);
+	static LMT_INLINE void treatChunk(Chunk *chunk);
 	static LMT_INLINE void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
 }
 #endif
@@ -479,7 +482,6 @@ namespace LiveMemTracer
 		size_t o = (t + alignment) & ~alignment;
 		size_t *addrPtr = (size_t*)((void*)(o - ALIGNED_HEADER_SIZE));
 		*addrPtr = (size_t)ptr;
-		LMT_ASSERT(o > (size_t)ptr, "Fuck it");
 		return (void*)o;
 	}
 #define IS_ALIGNED(POINTER, BYTE_COUNT) \
@@ -961,7 +963,7 @@ inline size_t LiveMemTracer::combineHash(const T& val, const size_t baseHash)
 	const uint8_t* bytes = (uint8_t*)&val;
 	const size_t count = sizeof(val);
 	const size_t FNV_offset_basis = baseHash;
-	const size_t FNV_prime = 1099511628211ULL;
+	const size_t FNV_prime = 16777619U;
 
 	size_t hash = FNV_offset_basis;
 	for (size_t i = 0; i < count; ++i)
@@ -1324,19 +1326,21 @@ namespace LiveMemTracer
 				if (temporaryChunk > 0)
 				{
 					ImGui::SameLine();
-					ImGui::TextColored(ImColor(1.f, 0.f, 0.f), "Temporary chunks : %i", temporaryChunk);
+					ImGui::TextColored(ImColor(1.f, 0.f, 0.f), "Temporary chunks : %i", int(temporaryChunk));
 				}
 				ImGui::SameLine();
 				ImGui::TextDisabled("(?)");
 				if (ImGui::IsItemHovered())
 				{
-					ImGui::SetTooltip("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
-				}
+					ImGui::BeginTooltip();
+					ImGui::Text("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 #ifdef LMT_DICTIONARY_STATS
-				ImGui::SameLine();
-				ImGui::Text("allocStackRefTable %f | allocRefTable %f | tree %f", g_allocStackRefTable.getHitStats()
-					, g_allocRefTable.getHitStats(), g_tree.getHitStats());
+					ImGui::Text("allocStackRefTable %f | %f%%", g_allocStackRefTable.getHitStats(), g_allocStackRefTable.getRatio());
+					ImGui::Text("allocRefTable %f | %f%%", g_allocRefTable.getHitStats(), g_allocRefTable.getRatio());
+					ImGui::Text("tree %f | %f%%", g_tree.getHitStats(), g_tree.getRatio());
 #endif
+					ImGui::EndTooltip();
+				}
 				ImGui::PopItemWidth();
 				ImGui::EndMenuBar();
 			}
