@@ -491,6 +491,8 @@ namespace LiveMemTracer
 void *LiveMemTracer::alloc(size_t size)
 {
 	void *ptr = LMT_USE_MALLOC(size + HEADER_SIZE);
+	if (!ptr)
+		return nullptr;
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(header, size);
 	header->aligned = 0;
@@ -540,6 +542,8 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 
 	logFreeInChunk(header);
 	void *newPtr = LMT_USE_REALLOC((void*)header, size + HEADER_SIZE);
+	if (!newPtr)
+		return newPtr;
 	header = (Header*)(newPtr);
 	logAllocInChunk(header, size);
 	header->aligned = 0;
@@ -568,6 +572,8 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 	LMT_ASSERT(oldHeader.aligned == 1, "");
 	LMT_ASSERT(IS_ALIGNED(ptr, alignment), "");
 	void *newPtr = allocAligned(size, alignment);
+	if (!newPtr)
+		return nullptr;
 	memcpy(newPtr, ptr, oldHeader.size < size ? oldHeader.size : size);
 	deallocAligned(ptr);
 	LMT_ASSERT(IS_ALIGNED(newPtr, alignment), "");
