@@ -109,8 +109,7 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 #undef LMT_TLS
 #undef LMT_INLINE
 #define LMT_TLS __thread
-// __attribute__((__always_inline__))
-#define LMT_INLINE
+#define LMT_INLINE __attribute__((__always_inline__))
 #else
 #define LMT_TLS
 #define LMT_INLINE
@@ -205,7 +204,7 @@ namespace LiveMemTracer
 	static const size_t HEADER_SIZE = sizeof(Header);
 	static const size_t ALIGNED_HEADER_SIZE = sizeof(size_t) + sizeof(Header);
 
-	enum ChunkStatus
+	enum class ChunkStatus : size_t
 	{
 		TREATED = 0,
 		PENDING,
@@ -269,28 +268,32 @@ namespace LiveMemTracer
 		{
 		}
 
-		struct Pair
+		class Pair
 		{
 		private:
-			Hash  hash;
-			Key   key;
-			Value value;
-			Pair() : hash(HASH_EMPTY) {}
+			Hash  _hash;
+			Key   _key;
+			Value _value;
+			Pair() : _hash(HASH_EMPTY) {}
 		public:
-			LMT_INLINE Value &getValue() { return value; }
+			LMT_INLINE Value &getValue() { return _value; }
 			friend class Dictionary;
 		};
 
 		LMT_INLINE Pair *update(const Key &key)
 		{
 			const size_t hash = getHash(key);
-			LMT_DEBUG_ASSERT(hash != HASH_INVALID, "This slot is already used.");
+			if (hash == HASH_INVALID)
+			{
+				static Pair fakePair;
+				return &fakePair;
+			}
 
 			Pair *pair = &_buffer[hash];
-			if (pair->hash == HASH_EMPTY)
+			if (pair->_hash == HASH_EMPTY)
 			{
-				pair->hash = hash;
-				pair->key = key;
+				pair->_hash = hash;
+				pair->_key = key;
 #ifdef LMT_DICTIONARY_STATS
 				_size.fetch_add(1);
 #endif
@@ -326,7 +329,7 @@ namespace LiveMemTracer
 			for (size_t i = 0; i < Capacity; ++i)
 			{
 				const size_t realHash = (key + i) % Capacity;
-				if (_buffer[realHash].hash == HASH_EMPTY || _buffer[realHash].key == key)
+				if (_buffer[realHash]._hash == HASH_EMPTY || _buffer[realHash]._key == key)
 				{
 #ifdef LMT_DICTIONARY_STATS
 					_hitCount += 1;
@@ -335,7 +338,6 @@ namespace LiveMemTracer
 					return realHash;
 				}
 			}
-			LMT_ASSERT(false, "Dictionary is full or quadratic probing reach it's limits.");
 			return HASH_INVALID;
 		}
 	};
@@ -369,8 +371,8 @@ namespace LiveMemTracer
 		sizeof(g_th_chunks)
 		+ sizeof(g_th_chunkIndex)
 		+ sizeof(g_th_cache)
-		+ sizeof(g_th_cacheIndex)
-		+ sizeof(g_th_initialized);
+		+ sizeof(g_th_initialized)
+		+ sizeof(g_th_cacheIndex);
 
 	static const size_t                                         g_internalSharedMemoryUsed =
 		sizeof(g_allocStackRefTable)
@@ -628,6 +630,8 @@ void LiveMemTracer::init()
 // IMPL ONLY : 
 //////////////////////////////////////////////////////////////////////////
 
+
+
 bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 {
 	return (chunk
@@ -640,19 +644,18 @@ LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 	void *ptr = LMT_USE_MALLOC(sizeof(Chunk));
 	memset(ptr, 0, sizeof(Chunk));
 	Chunk *tmpChunk = new(ptr)Chunk;
-
 	memset(g_th_cache, 0, sizeof(g_th_cache));
 	g_th_cacheIndex = 0;
 	tmpChunk->allocIndex = 0;
 	tmpChunk->stackIndex = 0;
-	tmpChunk->status = TEMPORARY;
+	tmpChunk->status = ChunkStatus::TEMPORARY;
 	g_temporaryChunkCounter.fetch_add(1);
 	return tmpChunk;
 }
 
 LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus status)
 {
-	// If it's not running we do not cycle arround pre-allocated
+	// If it's not running we do not cycle around pre-allocated
 	// chunks, we just use them once.
 	if (status != RunningStatus::RUNNING
 		&& g_th_chunkIndex + 1 >= CHUNK_NUMBER)
@@ -703,8 +706,8 @@ LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 	{
 		memset(g_th_chunks, 0, sizeof(g_th_chunks));
 		memset(g_th_cache, 0, sizeof(g_th_cache));
-		g_th_initialized = true;
 		g_internalAllThreadsMemoryUsed.fetch_add(g_internalPerThreadMemoryUsed);
+		g_th_initialized = true;
 	}
 
 	// If LMT is not initialized
