@@ -114,17 +114,17 @@ namespace LiveMemTracer
 {
 	typedef size_t Hash;
 
-	void *alloc(size_t size);
-	void *allocAligned(size_t size, size_t alignment);
-	void dealloc(void *ptr);
-	void deallocAligned(void *ptr);
-	void *realloc(void *ptr, size_t size);
+	LMT_INLINE void *alloc(size_t size);
+	LMT_INLINE void *allocAligned(size_t size, size_t alignment);
+	LMT_INLINE void dealloc(void *ptr);
+	LMT_INLINE void deallocAligned(void *ptr);
+	LMT_INLINE void *realloc(void *ptr, size_t size);
 	void *reallocAligned(void *ptr, size_t size, size_t alignment);
 	void exit();
 	void init();
 	void display(float dt);
 	struct Chunk;
-	Chunk *getChunk(bool forceFlush = false);
+	LMT_INLINE Chunk *getChunk(bool forceFlush = false);
 
 	namespace SymbolGetter
 	{
@@ -418,7 +418,7 @@ namespace LiveMemTracer
 		enum DisplayType : int
 		{
 			CALLEE = 0,
-			BUTTERFLY,
+			FUNCTION,
 			STACK,
 			HISTOGRAMS,
 			END
@@ -427,7 +427,7 @@ namespace LiveMemTracer
 		static const char *DisplayTypeStr[] =
 		{
 			"Callee",
-			"Butterfly",
+			"Function",
 			"Stack",
 			"Histograms"
 		};
@@ -441,12 +441,12 @@ namespace LiveMemTracer
 		static DisplayType                         g_displayType = DisplayType::CALLEE;
 		static std::vector<Histogram>              g_histograms;
 		static Alloc                              *g_searchResult;
-		static Alloc                              *g_butterfly;
+		static Alloc                              *g_functionView;
 
 		bool searchAlloc();
 		void displayCallee(Edge *callee, bool callerTooltip);
 		void renderCallees();
-		void renderButterfly();
+		void renderFunctionView();
 		void renderMenu();
 		void renderHistograms();
 		void renderStack();
@@ -1007,7 +1007,7 @@ namespace LiveMemTracer
 
 			Alloc **prevNext = &g_allocList;
 			g_searchResult = nullptr;
-			g_butterfly = nullptr;
+			g_functionView = nullptr;
 
 			while (alloc != nullptr)
 			{
@@ -1082,10 +1082,10 @@ namespace LiveMemTracer
 				{
 					createHistogram(callee->alloc);
 				}
-				if (ImGui::Selectable("Butterfly view"))
+				if (ImGui::Selectable("Function view"))
 				{
-					g_butterfly = callee->alloc;
-					g_displayType = DisplayType::BUTTERFLY;
+					g_functionView = callee->alloc;
+					g_displayType = DisplayType::FUNCTION;
 				}
 				ImGui::EndPopup();
 			}
@@ -1145,10 +1145,10 @@ namespace LiveMemTracer
 					{
 						createHistogram(callee);
 					}
-					if (ImGui::Selectable("Butterfly view"))
+					if (ImGui::Selectable("Function view"))
 					{
-						g_butterfly = callee;
-						g_displayType = DisplayType::BUTTERFLY;
+						g_functionView = callee;
+						g_displayType = DisplayType::FUNCTION;
 					}
 					ImGui::EndPopup();
 				}
@@ -1194,15 +1194,15 @@ namespace LiveMemTracer
 			return a.alloc < b.alloc;
 		}
 
-		void renderButterfly()
+		void renderFunctionView()
 		{
-			if (!g_butterfly)
+			if (!g_functionView)
 				return;
 			ImGui::Columns(3);
 
 			//////////////////////////////////////////////////////////////////////////
 			// CALLERS
-			Edge *edge = g_butterfly->edges;
+			Edge *edge = g_functionView->edges;
 			std::vector<GroupedEdge> groupedEdges;
 			size_t total = 0;
 
@@ -1215,7 +1215,7 @@ namespace LiveMemTracer
 					group.count = 0;
 
 					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
-					if (it == std::end(groupedEdges))
+					if (it == std::end(groupedEdges) || it->alloc != group.alloc)
 					{
 						it = groupedEdges.insert(it, group);
 					}
@@ -1239,7 +1239,7 @@ namespace LiveMemTracer
 				ImGui::SetCursorPos(imLocPos);
 				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
 				{
-					g_butterfly = caller.alloc;
+					g_functionView = caller.alloc;
 				}
 			}
 
@@ -1247,16 +1247,16 @@ namespace LiveMemTracer
 			// FUNCTION
 			ImGui::NextColumn();
 
-			g_butterfly->lastCount = g_butterfly->counter;
+			g_functionView->lastCount = g_functionView->counter;
 			const char *suffix;
-			float size = formatMemoryString(g_butterfly->lastCount, suffix);
-			ImGui::Text("%s : %f%s", g_butterfly->str, size, suffix);
+			float size = formatMemoryString(g_functionView->lastCount, suffix);
+			ImGui::Text("%s : %f%s", g_functionView->str, size, suffix);
 
 			//////////////////////////////////////////////////////////////////////////
 			// CALLEE
 			ImGui::NextColumn();
 
-			edge = g_butterfly->edges;
+			edge = g_functionView->edges;
 			groupedEdges.clear();
 			total = 0;
 
@@ -1269,7 +1269,7 @@ namespace LiveMemTracer
 					group.count = 0;
 
 					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
-					if (it == std::end(groupedEdges))
+					if (it == std::end(groupedEdges) || it->alloc != group.alloc)
 					{
 						it = groupedEdges.insert(it, group);
 					}
@@ -1293,7 +1293,7 @@ namespace LiveMemTracer
 				ImGui::SetCursorPos(imLocPos);
 				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
 				{
-					g_butterfly = caller.alloc;
+					g_functionView = caller.alloc;
 				}
 			}
 
@@ -1513,9 +1513,9 @@ namespace LiveMemTracer
 				{
 					renderStack();
 				}
-				else if (g_displayType == DisplayType::BUTTERFLY)
+				else if (g_displayType == DisplayType::FUNCTION)
 				{
-					renderButterfly();
+					renderFunctionView();
 				}
 			}
 			ImGui::End();
