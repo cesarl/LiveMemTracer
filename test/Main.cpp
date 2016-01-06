@@ -299,7 +299,6 @@ void smallLeak()
 
 int main(int ac, char **av)
 {
-	LMT_INIT_SYMBOLS();
 	LMT_INIT();
 
 	for (int j = 0; j < 500; ++j)

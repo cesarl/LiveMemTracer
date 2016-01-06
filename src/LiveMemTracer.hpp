@@ -17,7 +17,6 @@
 #define LMT_EXIT()do{}while(0)
 #define LMT_INIT()do{}while(0)
 #define LMT_FLUSH()do{}while(0)
-#define LMT_INIT_SYMBOLS(arg)do{}while(0)
 
 #else // LMT_ENABLED
 
@@ -29,14 +28,8 @@
 #define LMT_REALLOC_ALIGNED(ptr, size, alignment)::LiveMemTracer::reallocAligned(ptr, size, alignment)
 #define LMT_DISPLAY(dt)::LiveMemTracer::display(dt)
 #define LMT_EXIT()::LiveMemTracer::exit()
-#define LMT_INIT()::LiveMemTracer::init()
+#define LMT_INIT()::LiveMemTracer::SymbolGetter::init(); ::LiveMemTracer::init()
 #define LMT_FLUSH()::LiveMemTracer::getChunk(true)
-
-#ifdef LMT_PLATFORM_WINDOWS
-#define LMT_INIT_SYMBOLS(arg) ::LiveMemTracer::SymbolGetter::init()
-#else
-#define LMT_INIT_SYMBOLS(mapFilePath)LiveMemTracer::SymbolGetter::loadSymbolMap(mapFilePath)
-#endif
 
 #ifdef LMT_IMPL
 
@@ -121,25 +114,21 @@ namespace LiveMemTracer
 {
 	typedef size_t Hash;
 
-	LMT_INLINE void *alloc(size_t size);
-	LMT_INLINE void *allocAligned(size_t size, size_t alignment);
-	LMT_INLINE void dealloc(void *ptr);
-	LMT_INLINE void deallocAligned(void *ptr);
-	LMT_INLINE void *realloc(void *ptr, size_t size);
-	LMT_INLINE void *reallocAligned(void *ptr, size_t size, size_t alignment);
+	void *alloc(size_t size);
+	void *allocAligned(size_t size, size_t alignment);
+	void dealloc(void *ptr);
+	void deallocAligned(void *ptr);
+	void *realloc(void *ptr, size_t size);
+	void *reallocAligned(void *ptr, size_t size, size_t alignment);
 	void exit();
 	void init();
 	void display(float dt);
 	struct Chunk;
-	LMT_INLINE Chunk *getChunk(bool forceFlush = false);
+	Chunk *getChunk(bool forceFlush = false);
 
 	namespace SymbolGetter
 	{
-#if defined LMT_PLATFORM_ORBIS
-		void loadSymbolMap(const char *mapFilePath);
-#else
 		void init();
-#endif
 	}
 #ifdef LMT_IMPL
 	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
@@ -154,8 +143,8 @@ namespace LiveMemTracer
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 	static const char  *UNKNOWN_STACK_NAME = "Unknown\0";
 	static const size_t HISTORY_FRAME_NUMBER = 120;
-	template <class T> inline size_t combineHash(const T& val, const size_t baseHash = 2166136261U);
-	static LMT_INLINE uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash);
+	template <class T> LMT_INLINE size_t combineHash(const T& val, const size_t baseHash = 2166136261U);
+	static uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash);
 #endif
 }
 
@@ -280,7 +269,7 @@ namespace LiveMemTracer
 			friend class Dictionary;
 		};
 
-		LMT_INLINE Pair *update(const Key &key)
+		Pair *update(const Key &key)
 		{
 			const size_t hash = getHash(key);
 			if (hash == HASH_INVALID)
@@ -338,6 +327,9 @@ namespace LiveMemTracer
 					return realHash;
 				}
 			}
+#ifdef LMT_DICTIONARY_STATS
+			_hitTotal += Capacity - 1;
+#endif
 			return HASH_INVALID;
 		}
 	};
@@ -355,7 +347,6 @@ namespace LiveMemTracer
 	LMT_TLS static Hash                      g_th_cache[CACHE_SIZE];
 	LMT_TLS static uint8_t                   g_th_cacheIndex = 0;
 	LMT_TLS static bool                      g_th_initialized = false;
-	LMT_TLS static size_t                    g_th_recurseCounter = 0;
 
 
 	static Alloc                                               *g_allocList = nullptr;
@@ -450,25 +441,25 @@ namespace LiveMemTracer
 		static std::vector<Histogram>              g_histograms;
 		static Alloc                              *g_searchResult;
 
-		LMT_INLINE bool searchAlloc();
+		bool searchAlloc();
 		void displayCallee(Edge *callee, bool callerTooltip);
-		LMT_INLINE void renderCallees();
-		LMT_INLINE void renderMenu();
-		LMT_INLINE void renderHistograms();
-		LMT_INLINE void renderStack();
-		LMT_INLINE void createHistogram(Alloc *function);
-		LMT_INLINE void createHistogram(Edge  *functionCall);
-		LMT_INLINE void display(float dt);
+		void renderCallees();
+		void renderMenu();
+		void renderHistograms();
+		void renderStack();
+		void createHistogram(Alloc *function);
+		void createHistogram(Edge  *functionCall);
+		void display(float dt);
 	}
 
-	static LMT_INLINE bool chunkIsNotFull(const Chunk *chunk);
-	static LMT_INLINE Chunk *createTemporaryChunk();
-	static LMT_INLINE Chunk *createPreallocatedChunk(const RunningStatus status);
-	static LMT_INLINE uint8_t findInCache(Hash hash);
-	static LMT_INLINE void logAllocInChunk(Header *header, size_t size);
-	static LMT_INLINE void logFreeInChunk(Header *header);
-	static LMT_INLINE void treatChunk(Chunk *chunk);
-	static LMT_INLINE void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
+	static bool chunkIsNotFull(const Chunk *chunk);
+	static Chunk *createTemporaryChunk();
+	static Chunk *createPreallocatedChunk(const RunningStatus status);
+	static uint8_t findInCache(Hash hash);
+	static void logAllocInChunk(Header *header, size_t size);
+	static void logFreeInChunk(Header *header);
+	static void treatChunk(Chunk *chunk);
+	static void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
 }
 #endif
 
@@ -478,7 +469,7 @@ namespace LiveMemTracer
 #define GET_HEADER(ptr) (Header*)((void*)((size_t)ptr - HEADER_SIZE))
 #define GET_ALIGNED_PTR(ptr) (void*)(*(size_t*)((void*)(size_t(ptr) - ALIGNED_HEADER_SIZE)))
 #define GET_ALIGNED_SIZE(size, alignment) size + --alignment + ALIGNED_HEADER_SIZE
-	static inline void *REGISTER_ALIGNED_PTR(void *ptr, size_t alignment)
+	static LMT_INLINE void *REGISTER_ALIGNED_PTR(void *ptr, size_t alignment)
 	{
 		size_t t = (size_t)ptr + ALIGNED_HEADER_SIZE;
 		size_t o = (t + alignment) & ~alignment;
@@ -493,6 +484,7 @@ namespace LiveMemTracer
 void *LiveMemTracer::alloc(size_t size)
 {
 	void *ptr = LMT_USE_MALLOC(size + HEADER_SIZE);
+	LMT_ASSERT(ptr != nullptr, "Out of memory");
 	if (!ptr)
 		return nullptr;
 	Header *header = (Header*)(ptr);
@@ -510,6 +502,7 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 
 	size_t allocatedSize = GET_ALIGNED_SIZE(size, alignment);
 	void* r = LMT_USE_MALLOC(allocatedSize);
+	LMT_ASSERT(r != nullptr, "Out of memory");
 	if (!r)
 		return nullptr;
 	void* o = REGISTER_ALIGNED_PTR(r, alignment);
@@ -544,6 +537,7 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 
 	logFreeInChunk(header);
 	void *newPtr = LMT_USE_REALLOC((void*)header, size + HEADER_SIZE);
+	LMT_ASSERT(newPtr != nullptr, "Out of memory");
 	if (!newPtr)
 		return newPtr;
 	header = (Header*)(newPtr);
@@ -642,6 +636,9 @@ bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 {
 	void *ptr = LMT_USE_MALLOC(sizeof(Chunk));
+	LMT_ASSERT(ptr != nullptr, "Out of memory");
+	if (ptr == nullptr)
+		return nullptr;
 	memset(ptr, 0, sizeof(Chunk));
 	Chunk *tmpChunk = new(ptr)Chunk;
 	memset(g_th_cache, 0, sizeof(g_th_cache));
@@ -681,23 +678,8 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 	return chunk;
 }
 
-struct RecurseCounter
-{
-	RecurseCounter()
-	{
-		++LiveMemTracer::g_th_recurseCounter;
-	}
-	~RecurseCounter()
-	{
-		--LiveMemTracer::g_th_recurseCounter;
-	}
-};
-
-
 LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 {
-	RecurseCounter recurseCounter;
-
 	Chunk *currentChunk = nullptr;
 	const RunningStatus status = g_runningStatus;
 
@@ -792,15 +774,14 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 {
 	Chunk *chunk = getChunk();
 
-	Hash hash;
+	header->hash = 0;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = getCallstack(STACK_SIZE_PER_ALLOC, stack, &hash);
+	uint32_t count = getCallstack(STACK_SIZE_PER_ALLOC, stack, &header->hash);
 
 	header->size = size;
-	header->hash = hash;
 
 	size_t index = chunk->allocIndex;
-	uint8_t found = findInCache(hash);
+	uint8_t found = findInCache(header->hash);
 	if (found != uint8_t(-1))
 	{
 		index = chunk->allocIndex - found - 1;
@@ -810,9 +791,9 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 
 	chunk->allocStackIndex[index] = chunk->stackIndex;
 	chunk->allocSize[index] = size;
-	chunk->allocHash[index] = hash;
+	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = count;
-	g_th_cache[g_th_cacheIndex] = hash;
+	g_th_cache[g_th_cacheIndex] = header->hash;
 	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
 	chunk->allocIndex += 1;
 	chunk->stackIndex += count;
@@ -967,7 +948,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 }
 
 template <class T>
-inline size_t LiveMemTracer::combineHash(const T& val, const size_t baseHash)
+LMT_INLINE size_t LiveMemTracer::combineHash(const T& val, const size_t baseHash)
 {
 	const uint8_t* bytes = (uint8_t*)&val;
 	const size_t count = sizeof(val);
@@ -1360,9 +1341,11 @@ namespace LiveMemTracer
 			g_refresh = false;
 			g_updateSearch = false;
 			g_updateRatio += dt;
-
 			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar))
 			{
+				ImGui::CaptureMouseFromApp();
+				ImGui::CaptureKeyboardFromApp();
+
 				renderMenu();
 				if (g_refeshAuto && g_updateRatio >= 1.f)
 				{
