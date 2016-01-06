@@ -977,6 +977,24 @@ namespace LiveMemTracer
 {
 	namespace Renderer
 	{
+		struct GroupedEdge
+		{
+			Alloc *alloc;
+			size_t count;
+		};
+
+		static bool SortGroupedEdge(const GroupedEdge &a, const GroupedEdge &b)
+		{
+			return a.count > b.count;
+		}
+
+		static bool InsertSortedEdge(const GroupedEdge &a, const GroupedEdge &b)
+		{
+			return a.alloc < b.alloc;
+		}
+
+		static std::vector<GroupedEdge> g_groupedEdges;
+
 		float formatMemoryString(int64_t sizeInBytes, const char *&str)
 		{
 			if (sizeInBytes < 0)
@@ -1178,22 +1196,6 @@ namespace LiveMemTracer
 			ImGui::EndChild();
 		}
 
-		struct GroupedEdge
-		{
-			Alloc *alloc;
-			size_t count;
-		};
-
-		static bool SortGroupedEdge(const GroupedEdge &a, const GroupedEdge &b)
-		{
-			return a.count > b.count;
-		}
-
-		static bool InsertSortedEdge(const GroupedEdge &a, const GroupedEdge &b)
-		{
-			return a.alloc < b.alloc;
-		}
-
 		void renderFunctionView()
 		{
 			if (!g_functionView)
@@ -1203,8 +1205,8 @@ namespace LiveMemTracer
 			//////////////////////////////////////////////////////////////////////////
 			// CALLERS
 			Edge *edge = g_functionView->edges;
-			std::vector<GroupedEdge> groupedEdges;
 			size_t total = 0;
+			g_groupedEdges.clear();
 
 			while (edge)
 			{
@@ -1214,10 +1216,10 @@ namespace LiveMemTracer
 					group.alloc = edge->from->alloc;
 					group.count = 0;
 
-					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
-					if (it == std::end(groupedEdges) || it->alloc != group.alloc)
+					auto it = std::lower_bound(std::begin(g_groupedEdges), std::end(g_groupedEdges), group, InsertSortedEdge);
+					if (it == std::end(g_groupedEdges) || it->alloc != group.alloc)
 					{
-						it = groupedEdges.insert(it, group);
+						it = g_groupedEdges.insert(it, group);
 					}
 					total += edge->count;
 					it->count += edge->count;
@@ -1225,9 +1227,9 @@ namespace LiveMemTracer
 				edge = edge->same;
 			}
 
-			std::sort(std::begin(groupedEdges), std::end(groupedEdges), SortGroupedEdge);
+			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
 
-			for (auto &caller : groupedEdges)
+			for (auto &caller : g_groupedEdges)
 			{
 				const char *suffix;
 				float size = formatMemoryString(caller.count, suffix);
@@ -1257,7 +1259,7 @@ namespace LiveMemTracer
 			ImGui::NextColumn();
 
 			edge = g_functionView->edges;
-			groupedEdges.clear();
+			g_groupedEdges.clear();
 			total = 0;
 
 			while (edge)
@@ -1268,10 +1270,10 @@ namespace LiveMemTracer
 					group.alloc = to->alloc;
 					group.count = 0;
 
-					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
-					if (it == std::end(groupedEdges) || it->alloc != group.alloc)
+					auto it = std::lower_bound(std::begin(g_groupedEdges), std::end(g_groupedEdges), group, InsertSortedEdge);
+					if (it == std::end(g_groupedEdges) || it->alloc != group.alloc)
 					{
-						it = groupedEdges.insert(it, group);
+						it = g_groupedEdges.insert(it, group);
 					}
 					it->count += to->count;
 					total += to->count;
@@ -1279,9 +1281,9 @@ namespace LiveMemTracer
 				edge = edge->same;
 			}
 
-			std::sort(std::begin(groupedEdges), std::end(groupedEdges), SortGroupedEdge);
+			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
 
-			for (auto &caller : groupedEdges)
+			for (auto &caller : g_groupedEdges)
 			{
 				const char *suffix;
 				float size = formatMemoryString(caller.count, suffix);
