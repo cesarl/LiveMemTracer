@@ -243,6 +243,7 @@ namespace LiveMemTracer
 		Edge *from;
 		Edge *same;
 		int64_t lastCount;
+		uint8_t depth;
 		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr), lastCount(0) {}
 	};
 
@@ -416,8 +417,8 @@ namespace LiveMemTracer
 
 		enum DisplayType : int
 		{
-			//CALLER = 0,
 			CALLEE = 0,
+			BUTTERFLY,
 			STACK,
 			HISTOGRAMS,
 			END
@@ -425,8 +426,8 @@ namespace LiveMemTracer
 
 		static const char *DisplayTypeStr[] =
 		{
-			//"Caller",
 			"Callee",
+			"Butterfly",
 			"Stack",
 			"Histograms"
 		};
@@ -440,10 +441,12 @@ namespace LiveMemTracer
 		static DisplayType                         g_displayType = DisplayType::CALLEE;
 		static std::vector<Histogram>              g_histograms;
 		static Alloc                              *g_searchResult;
+		static Alloc                              *g_butterfly;
 
 		bool searchAlloc();
 		void displayCallee(Edge *callee, bool callerTooltip);
 		void renderCallees();
+		void renderButterfly();
 		void renderMenu();
 		void renderHistograms();
 		void renderStack();
@@ -938,6 +941,8 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 				if (it == std::end(g_allocStackRoots))
 					g_allocStackRoots.push_back(currentPtr);
 			}
+
+			currentPtr->depth = depth;
 		}
 		LMT_DEBUG_ASSERT(strcmp(currentPtr->alloc->str, allocStack.stackAllocs[stackSize]->str) == 0, "Name collision.");
 
@@ -1002,6 +1007,7 @@ namespace LiveMemTracer
 
 			Alloc **prevNext = &g_allocList;
 			g_searchResult = nullptr;
+			g_butterfly = nullptr;
 
 			while (alloc != nullptr)
 			{
@@ -1076,6 +1082,11 @@ namespace LiveMemTracer
 				{
 					createHistogram(callee->alloc);
 				}
+				if (ImGui::Selectable("Butterfly view"))
+				{
+					g_butterfly = callee->alloc;
+					g_displayType = DisplayType::BUTTERFLY;
+				}
 				ImGui::EndPopup();
 			}
 			if (opened)
@@ -1134,6 +1145,11 @@ namespace LiveMemTracer
 					{
 						createHistogram(callee);
 					}
+					if (ImGui::Selectable("Butterfly view"))
+					{
+						g_butterfly = callee;
+						g_displayType = DisplayType::BUTTERFLY;
+					}
 					ImGui::EndPopup();
 				}
 
@@ -1160,6 +1176,128 @@ namespace LiveMemTracer
 				callee = callee->next;
 			}
 			ImGui::EndChild();
+		}
+
+		struct GroupedEdge
+		{
+			Alloc *alloc;
+			size_t count;
+		};
+
+		static bool SortGroupedEdge(const GroupedEdge &a, const GroupedEdge &b)
+		{
+			return a.count > b.count;
+		}
+
+		static bool InsertSortedEdge(const GroupedEdge &a, const GroupedEdge &b)
+		{
+			return a.alloc < b.alloc;
+		}
+
+		void renderButterfly()
+		{
+			if (!g_butterfly)
+				return;
+			ImGui::Columns(3);
+
+			//////////////////////////////////////////////////////////////////////////
+			// CALLERS
+			Edge *edge = g_butterfly->edges;
+			std::vector<GroupedEdge> groupedEdges;
+			size_t total = 0;
+
+			while (edge)
+			{
+				if (edge->from)
+				{
+					GroupedEdge group;
+					group.alloc = edge->from->alloc;
+					group.count = 0;
+
+					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
+					if (it == std::end(groupedEdges))
+					{
+						it = groupedEdges.insert(it, group);
+					}
+					total += edge->count;
+					it->count += edge->count;
+				}
+				edge = edge->same;
+			}
+
+			std::sort(std::begin(groupedEdges), std::end(groupedEdges), SortGroupedEdge);
+
+			for (auto &caller : groupedEdges)
+			{
+				const char *suffix;
+				float size = formatMemoryString(caller.count, suffix);
+				ImVec2 imPos = ImGui::GetCursorScreenPos();
+				ImVec2 imLocPos = ImGui::GetCursorPos();
+				ImGui::GetWindowDrawList()->AddRectFilled(imPos, ImVec2(imPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), imPos.y + ImGui::GetTextLineHeight()), 0xFF025CAB);
+				ImGui::SetCursorPos(imLocPos);
+				ImGui::Text("%s : %f%s", caller.alloc->str, size, suffix);
+				ImGui::SetCursorPos(imLocPos);
+				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
+				{
+					g_butterfly = caller.alloc;
+				}
+			}
+
+			//////////////////////////////////////////////////////////////////////////
+			// FUNCTION
+			ImGui::NextColumn();
+
+			g_butterfly->lastCount = g_butterfly->counter;
+			const char *suffix;
+			float size = formatMemoryString(g_butterfly->lastCount, suffix);
+			ImGui::Text("%s : %f%s", g_butterfly->str, size, suffix);
+
+			//////////////////////////////////////////////////////////////////////////
+			// CALLEE
+			ImGui::NextColumn();
+
+			edge = g_butterfly->edges;
+			groupedEdges.clear();
+			total = 0;
+
+			while (edge)
+			{
+				for (auto &to : edge->to)
+				{
+					GroupedEdge group;
+					group.alloc = to->alloc;
+					group.count = 0;
+
+					auto it = std::lower_bound(std::begin(groupedEdges), std::end(groupedEdges), group, InsertSortedEdge);
+					if (it == std::end(groupedEdges))
+					{
+						it = groupedEdges.insert(it, group);
+					}
+					it->count += to->count;
+					total += to->count;
+				}
+				edge = edge->same;
+			}
+
+			std::sort(std::begin(groupedEdges), std::end(groupedEdges), SortGroupedEdge);
+
+			for (auto &caller : groupedEdges)
+			{
+				const char *suffix;
+				float size = formatMemoryString(caller.count, suffix);
+				ImVec2 imPos = ImGui::GetCursorScreenPos();
+				ImVec2 imLocPos = ImGui::GetCursorPos();
+				ImGui::GetWindowDrawList()->AddRectFilled(imPos, ImVec2(imPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), imPos.y + ImGui::GetTextLineHeight()), 0xFF049ACC);
+				ImGui::SetCursorPos(imLocPos);
+				ImGui::Text("%s : %f%s", caller.alloc->str, size, suffix);
+				ImGui::SetCursorPos(imLocPos);
+				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
+				{
+					g_butterfly = caller.alloc;
+				}
+			}
+
+			ImGui::Columns(1);
 		}
 
 		void renderHistograms()
@@ -1374,6 +1512,10 @@ namespace LiveMemTracer
 				else if (g_displayType == DisplayType::STACK)
 				{
 					renderStack();
+				}
+				else if (g_displayType == DisplayType::BUTTERFLY)
+				{
+					renderButterfly();
 				}
 			}
 			ImGui::End();
