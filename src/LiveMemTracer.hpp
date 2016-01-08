@@ -217,13 +217,12 @@ namespace LiveMemTracer
 
 	struct Alloc
 	{
-		int64_t counter;
-		int64_t lastCount;
+		int64_t count;
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
 		Edge  *edges;
-		Alloc() : counter(0), lastCount(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
+		Alloc() : count(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
 	};
 
 	struct AllocStack
@@ -242,9 +241,8 @@ namespace LiveMemTracer
 		std::vector<Edge*> to;
 		Edge *from;
 		Edge *same;
-		int64_t lastCount;
 		uint8_t depth;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr), lastCount(0) {}
+		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr) {}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -840,7 +838,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			updateTree(allocStack, size, false);
 			for (size_t j = 0; j < allocStack.stackSize; ++j)
 			{
-				allocStack.stackAllocs[j]->counter += size;
+				allocStack.stackAllocs[j]->count += size;
 			}
 			continue;
 		}
@@ -854,14 +852,14 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			if (found->getValue().shared != nullptr)
 			{
 				auto shared = found->getValue().shared;
-				shared->counter += size;
+				shared->count += size;
 				allocStack.stackAllocs[j] = shared;
 				continue;
 			}
 			if (found->getValue().str != nullptr)
 			{
 				allocStack.stackAllocs[j] = &found->getValue();
-				found->getValue().counter += size;
+				found->getValue().count += size;
 				continue;
 			}
 			void *absoluteAddress = nullptr;
@@ -872,7 +870,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			{
 				found->getValue().shared = &shared->getValue();
 				allocStack.stackAllocs[j] = &shared->getValue();
-				shared->getValue().counter += size;
+				shared->getValue().count += size;
 #ifdef LMT_PLATFORM_WINDOWS
 				if (name != TRUNCATED_STACK_NAME)
 					LMT_USE_FREE((void*)name);
@@ -882,7 +880,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 
 			found->getValue().shared = &shared->getValue();
 			shared->getValue().str = name;
-			shared->getValue().counter = size;
+			shared->getValue().count = size;
 			allocStack.stackAllocs[j] = &shared->getValue();
 			shared->getValue().next = g_allocList;
 			g_allocList = &shared->getValue();
@@ -1070,14 +1068,9 @@ namespace LiveMemTracer
 			if (!callee)
 				return;
 
-			if (g_refresh)
-			{
-				callee->lastCount = callee->count;
-			}
-
 			ImGui::PushID(callee);
 			const char *suffix;
-			float size = formatMemoryString(callee->lastCount, suffix);
+			float size = formatMemoryString(callee->count, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
 			const bool opened = ImGui::TreeNode(callee, "%f %s", size, suffix);
 			cursorPos.x += 150;
@@ -1111,7 +1104,7 @@ namespace LiveMemTracer
 			{
 				if (g_refresh)
 				{
-					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->lastCount > b->lastCount; });
+					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->count > b->count; });
 				}
 				for (auto &to : callee->to)
 					displayCallee(to, callerTooltip);
@@ -1138,10 +1131,6 @@ namespace LiveMemTracer
 				}
 
 				ImGui::PushID(callee);
-				if (g_refresh)
-				{
-					callee->lastCount = callee->counter;
-				}
 				++i;
 				auto cursorPos = ImGui::GetCursorPos();
 				if (i % 2)
@@ -1174,7 +1163,7 @@ namespace LiveMemTracer
 				cursorPos.x += 25;
 				cursorPos.y += 3;
 				const char *suffix;
-				float size = formatMemoryString(callee->lastCount, suffix);
+				float size = formatMemoryString(callee->count, suffix);
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::Text("%f %s", size, suffix);
 				cursorPos.x += 150 - 25;
@@ -1249,9 +1238,8 @@ namespace LiveMemTracer
 			// FUNCTION
 			ImGui::NextColumn();
 
-			g_functionView->lastCount = g_functionView->counter;
 			const char *suffix;
-			float size = formatMemoryString(g_functionView->lastCount, suffix);
+			float size = formatMemoryString(g_functionView->count, suffix);
 			ImGui::Text("%s : %f%s", g_functionView->str, size, suffix);
 
 			//////////////////////////////////////////////////////////////////////////
@@ -1529,7 +1517,7 @@ namespace LiveMemTracer
 				{
 					if (h.isFunction)
 					{
-						h.currentCount = h.function->counter;
+						h.currentCount = h.function->count;
 						h.count[h.cursor] = h.currentCount;
 					}
 					else
