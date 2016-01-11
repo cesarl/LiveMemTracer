@@ -1040,7 +1040,31 @@ namespace LiveMemTracer
 				}
 				alloc = next;
 			}
-			*prevNext = g_searchResult;
+
+			bool hasChanged = true;
+			while (g_searchResult && hasChanged)
+			{
+				hasChanged = false;
+				Alloc **pv = &g_searchResult;
+				Alloc *nd = g_searchResult;
+				Alloc *nx = g_searchResult->next;
+
+				while (nx)
+				{
+					if (nd->count < nx->count)
+					{
+						nd->next = nx->next;
+						nx->next = nd;
+						*pv = nx;
+
+						hasChanged = true;
+					}
+					pv = &nd->next;
+					nd = nx;
+					nx = nx->next;
+				}
+			}
+
 			return g_searchResult != nullptr;
 		}
 
