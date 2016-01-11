@@ -1064,6 +1064,7 @@ namespace LiveMemTracer
 					nx = nx->next;
 				}
 			}
+			*prevNext = g_searchResult;
 
 			return g_searchResult != nullptr;
 		}
