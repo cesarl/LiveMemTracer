@@ -1040,7 +1040,32 @@ namespace LiveMemTracer
 				}
 				alloc = next;
 			}
+
+			bool hasChanged = true;
+			while (g_searchResult && hasChanged)
+			{
+				hasChanged = false;
+				Alloc **pv = &g_searchResult;
+				Alloc *nd = g_searchResult;
+				Alloc *nx = g_searchResult->next;
+
+				while (nx)
+				{
+					if (nd->count < nx->count)
+					{
+						nd->next = nx->next;
+						nx->next = nd;
+						*pv = nx;
+
+						hasChanged = true;
+					}
+					pv = &nd->next;
+					nd = nx;
+					nx = nx->next;
+				}
+			}
 			*prevNext = g_searchResult;
+
 			return g_searchResult != nullptr;
 		}
 
@@ -1220,18 +1245,25 @@ namespace LiveMemTracer
 
 			for (auto &caller : g_groupedEdges)
 			{
+				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
 				float size = formatMemoryString(caller.count, suffix);
-				ImVec2 imPos = ImGui::GetCursorScreenPos();
-				ImVec2 imLocPos = ImGui::GetCursorPos();
-				ImGui::GetWindowDrawList()->AddRectFilled(imPos, ImVec2(imPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), imPos.y + ImGui::GetTextLineHeight()), 0xFF025CAB);
-				ImGui::SetCursorPos(imLocPos);
-				ImGui::Text("%s : %f%s", caller.alloc->str, size, suffix);
-				ImGui::SetCursorPos(imLocPos);
-				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
+				ImGui::TextWrapped("%s\n%f%s", caller.alloc->str, size, suffix);
+				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
 				{
 					g_functionView = caller.alloc;
 				}
+				ImGui::PushID(caller.alloc);
+				if (ImGui::BeginPopupContextItem("Options"))
+				{
+					if (ImGui::Selectable("Watch function"))
+					{
+						createHistogram(caller.alloc);
+					}
+					ImGui::EndPopup();
+				}
+				ImGui::PopID();
+				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
 
 			//////////////////////////////////////////////////////////////////////////
@@ -1240,7 +1272,7 @@ namespace LiveMemTracer
 
 			const char *suffix;
 			float size = formatMemoryString(g_functionView->count, suffix);
-			ImGui::Text("%s : %f%s", g_functionView->str, size, suffix);
+			ImGui::TextWrapped("%s\n%f%s", g_functionView->str, size, suffix);
 
 			//////////////////////////////////////////////////////////////////////////
 			// CALLEE
@@ -1271,20 +1303,27 @@ namespace LiveMemTracer
 
 			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
 
-			for (auto &caller : g_groupedEdges)
+			for (auto &callee : g_groupedEdges)
 			{
+				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
-				float size = formatMemoryString(caller.count, suffix);
-				ImVec2 imPos = ImGui::GetCursorScreenPos();
-				ImVec2 imLocPos = ImGui::GetCursorPos();
-				ImGui::GetWindowDrawList()->AddRectFilled(imPos, ImVec2(imPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), imPos.y + ImGui::GetTextLineHeight()), 0xFF049ACC);
-				ImGui::SetCursorPos(imLocPos);
-				ImGui::Text("%s : %f%s", caller.alloc->str, size, suffix);
-				ImGui::SetCursorPos(imLocPos);
-				if (ImGui::InvisibleButton(caller.alloc->str, ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight())))
+				float size = formatMemoryString(callee.count, suffix);
+				ImGui::TextWrapped("%s\n%f%s", callee.alloc->str, size, suffix);
+				ImGui::PushID(callee.alloc);
+				if (ImGui::BeginPopupContextItem("Options"))
 				{
-					g_functionView = caller.alloc;
+					if (ImGui::Selectable("Watch function"))
+					{
+						createHistogram(callee.alloc);
+					}
+					ImGui::EndPopup();
 				}
+				ImGui::PopID();
+				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+				{
+					g_functionView = callee.alloc;
+				}
+				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(callee.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
 
 			ImGui::Columns(1);
@@ -1300,11 +1339,6 @@ namespace LiveMemTracer
 			while (it != std::end(g_histograms))
 			{
 				auto &h = *it;
-				if (g_searchStr[0] && LMT_STRSTRI(h.name, g_searchStr) == nullptr)
-				{
-					++it;
-					continue;
-				}
 
 				bool toDelete = false;
 				ImGui::PushID(i);
@@ -1437,6 +1471,7 @@ namespace LiveMemTracer
 					ImGui::SameLine();
 					if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
 					{
+						g_displayType = DisplayType::CALLEE;
 						g_updateSearch = true;
 					}
 				}
