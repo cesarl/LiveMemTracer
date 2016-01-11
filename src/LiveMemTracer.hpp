@@ -218,11 +218,12 @@ namespace LiveMemTracer
 	struct Alloc
 	{
 		int64_t count;
+		int64_t countCache;
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
 		Edge  *edges;
-		Alloc() : count(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
+		Alloc() : count(0), countCache(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
 	};
 
 	struct AllocStack
@@ -237,6 +238,7 @@ namespace LiveMemTracer
 	struct Edge
 	{
 		int64_t count;
+		int64_t countCache;
 		Alloc *alloc;
 		std::vector<Edge*> to;
 		Edge *from;
@@ -406,8 +408,8 @@ namespace LiveMemTracer
 			bool  isFunction;
 			int64_t count[HISTORY_FRAME_NUMBER];
 			size_t  cursor;
-			int64_t currentCount;
-			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), currentCount(0)
+			int64_t countCache;
+			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), countCache(0)
 			{
 				memset(count, 0, sizeof(count));
 			}
@@ -1047,11 +1049,13 @@ namespace LiveMemTracer
 				hasChanged = false;
 				Alloc **pv = &g_searchResult;
 				Alloc *nd = g_searchResult;
+				nd->countCache = nd->count;
 				Alloc *nx = g_searchResult->next;
 
 				while (nx)
 				{
-					if (nd->count < nx->count)
+					nx->countCache = nx->count;
+					if (nd->countCache < nx->countCache)
 					{
 						nd->next = nx->next;
 						nx->next = nd;
@@ -1095,7 +1099,9 @@ namespace LiveMemTracer
 
 			ImGui::PushID(callee);
 			const char *suffix;
-			float size = formatMemoryString(callee->count, suffix);
+			if (g_refresh)
+				callee->countCache = callee->count;
+			float size = formatMemoryString(callee->countCache, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
 			const bool opened = ImGui::TreeNode(callee, "%f %s", size, suffix);
 			cursorPos.x += 150;
@@ -1129,7 +1135,7 @@ namespace LiveMemTracer
 			{
 				if (g_refresh)
 				{
-					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->count > b->count; });
+					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
 				}
 				for (auto &to : callee->to)
 					displayCallee(to, callerTooltip);
@@ -1188,7 +1194,7 @@ namespace LiveMemTracer
 				cursorPos.x += 25;
 				cursorPos.y += 3;
 				const char *suffix;
-				float size = formatMemoryString(callee->count, suffix);
+				float size = formatMemoryString(callee->countCache, suffix);
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::Text("%f %s", size, suffix);
 				cursorPos.x += 150 - 25;
@@ -1235,8 +1241,8 @@ namespace LiveMemTracer
 					{
 						it = g_groupedEdges.insert(it, group);
 					}
-					total += edge->count;
-					it->count += edge->count;
+					total += edge->countCache;
+					it->count += edge->countCache;
 				}
 				edge = edge->same;
 			}
@@ -1271,7 +1277,7 @@ namespace LiveMemTracer
 			ImGui::NextColumn();
 
 			const char *suffix;
-			float size = formatMemoryString(g_functionView->count, suffix);
+			float size = formatMemoryString(g_functionView->countCache, suffix);
 			ImGui::TextWrapped("%s\n%f%s", g_functionView->str, size, suffix);
 
 			//////////////////////////////////////////////////////////////////////////
@@ -1295,8 +1301,8 @@ namespace LiveMemTracer
 					{
 						it = g_groupedEdges.insert(it, group);
 					}
-					it->count += to->count;
-					total += to->count;
+					it->count += to->countCache;
+					total += to->countCache;
 				}
 				edge = edge->same;
 			}
@@ -1347,7 +1353,7 @@ namespace LiveMemTracer
 				ImGui::BeginGroup();
 				ImGui::TextColored(h.isFunction ? ImColor(217, 164, 22) : ImColor(209, 6, 145), "%s", h.isFunction ? "Function" : "Call"); ImGui::SameLine();
 				const char *suffix;
-				float size = formatMemoryString(h.currentCount, suffix);
+				float size = formatMemoryString(h.countCache, suffix);
 				ImGui::Text("%f %s", size, suffix);
 				if (h.isFunction == false)
 				{
@@ -1518,7 +1524,7 @@ namespace LiveMemTracer
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-				if (g_updateSearch)
+				if (g_updateSearch || g_refresh)
 				{
 					if (strlen(g_searchStr) > 0)
 					{
@@ -1552,13 +1558,13 @@ namespace LiveMemTracer
 				{
 					if (h.isFunction)
 					{
-						h.currentCount = h.function->count;
-						h.count[h.cursor] = h.currentCount;
+						h.countCache = h.function->count;
+						h.count[h.cursor] = h.countCache;
 					}
 					else
 					{
-						h.currentCount = h.call->count;
-						h.count[h.cursor] = h.currentCount;
+						h.countCache = h.call->count;
+						h.count[h.cursor] = h.countCache;
 					}
 					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				}
