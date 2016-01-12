@@ -1295,6 +1295,17 @@ namespace LiveMemTracer
 				g_functionView->countCache = g_functionView->count;
 			float size = formatMemoryString(g_functionView->countCache, suffix);
 			ImGui::TextWrapped("%s\n%f%s", g_functionView->str, size, suffix);
+			ImGui::PushID(g_functionView);
+			if (ImGui::BeginPopupContextItem("Options"))
+			{
+				if (ImGui::Selectable("Watch function"))
+				{
+					createHistogram(g_functionView);
+					g_displayType = DisplayType::HISTOGRAMS;
+				}
+				ImGui::EndPopup();
+			}
+			ImGui::PopID();
 
 			//////////////////////////////////////////////////////////////////////////
 			// CALLEE
