@@ -432,8 +432,15 @@ namespace LiveMemTracer
 			"Histograms"
 		};
 
+		enum UpdateType : uint8_t
+		{
+			NONE = 0,
+			CURRENT_FRAME,
+			CURRENT_AND_NEXT_FRAME
+		};
+
 		static bool                                g_refeshAuto = true;
-		static bool                                g_refresh = false;
+		static UpdateType                          g_updateType = UpdateType::NONE;
 		static bool                                g_updateSearch = false;
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
@@ -1025,7 +1032,6 @@ namespace LiveMemTracer
 
 			Alloc **prevNext = &g_allocList;
 			g_searchResult = nullptr;
-			g_functionView = nullptr;
 
 			while (alloc != nullptr)
 			{
@@ -1099,7 +1105,7 @@ namespace LiveMemTracer
 
 			ImGui::PushID(callee);
 			const char *suffix;
-			if (g_refresh)
+			if (g_updateType != UpdateType::NONE)
 				callee->countCache = callee->count;
 			float size = formatMemoryString(callee->countCache, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
@@ -1123,17 +1129,19 @@ namespace LiveMemTracer
 				if (ImGui::Selectable("Watch function"))
 				{
 					createHistogram(callee->alloc);
+					g_displayType = DisplayType::HISTOGRAMS;
 				}
 				if (ImGui::Selectable("Function view"))
 				{
 					g_functionView = callee->alloc;
 					g_displayType = DisplayType::FUNCTION;
+					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
 				ImGui::EndPopup();
 			}
 			if (opened)
 			{
-				if (g_refresh)
+				if (g_updateType != UpdateType::NONE)
 				{
 					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
 				}
@@ -1182,11 +1190,13 @@ namespace LiveMemTracer
 					if (ImGui::Selectable("Watch function"))
 					{
 						createHistogram(callee);
+						g_displayType = DisplayType::HISTOGRAMS;
 					}
 					if (ImGui::Selectable("Function view"))
 					{
 						g_functionView = callee;
 						g_displayType = DisplayType::FUNCTION;
+						g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 					}
 					ImGui::EndPopup();
 				}
@@ -1242,6 +1252,8 @@ namespace LiveMemTracer
 						it = g_groupedEdges.insert(it, group);
 					}
 					total += edge->countCache;
+					if (g_updateType != UpdateType::NONE)
+						edge->countCache = edge->count;
 					it->count += edge->countCache;
 				}
 				edge = edge->same;
@@ -1258,6 +1270,7 @@ namespace LiveMemTracer
 				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
 				{
 					g_functionView = caller.alloc;
+					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
 				ImGui::PushID(caller.alloc);
 				if (ImGui::BeginPopupContextItem("Options"))
@@ -1265,6 +1278,7 @@ namespace LiveMemTracer
 					if (ImGui::Selectable("Watch function"))
 					{
 						createHistogram(caller.alloc);
+						g_displayType = DisplayType::HISTOGRAMS;
 					}
 					ImGui::EndPopup();
 				}
@@ -1277,6 +1291,8 @@ namespace LiveMemTracer
 			ImGui::NextColumn();
 
 			const char *suffix;
+			if (g_updateType != UpdateType::NONE)
+				g_functionView->countCache = g_functionView->count;
 			float size = formatMemoryString(g_functionView->countCache, suffix);
 			ImGui::TextWrapped("%s\n%f%s", g_functionView->str, size, suffix);
 
@@ -1301,6 +1317,8 @@ namespace LiveMemTracer
 					{
 						it = g_groupedEdges.insert(it, group);
 					}
+					if (g_updateType != UpdateType::NONE)
+						to->countCache = to->count;
 					it->count += to->countCache;
 					total += to->countCache;
 				}
@@ -1321,6 +1339,7 @@ namespace LiveMemTracer
 					if (ImGui::Selectable("Watch function"))
 					{
 						createHistogram(callee.alloc);
+						g_displayType = DisplayType::HISTOGRAMS;
 					}
 					ImGui::EndPopup();
 				}
@@ -1328,6 +1347,7 @@ namespace LiveMemTracer
 				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
 				{
 					g_functionView = callee.alloc;
+					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
 				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(callee.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
@@ -1470,7 +1490,8 @@ namespace LiveMemTracer
 				if (!g_refeshAuto)
 				{
 					ImGui::SameLine();
-					g_refresh = ImGui::Button("Refresh");
+					if (ImGui::Button("Refresh"))
+						g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
 				if (g_displayType != DisplayType::STACK)
 				{
@@ -1507,24 +1528,26 @@ namespace LiveMemTracer
 
 		void render(float dt)
 		{
-			g_refresh = false;
 			g_updateSearch = false;
 			g_updateRatio += dt;
+			bool second = false;
 			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar))
 			{
 				ImGui::CaptureMouseFromApp();
 				ImGui::CaptureKeyboardFromApp();
 
 				renderMenu();
-				if (g_refeshAuto && g_updateRatio >= 1.f)
+				if (g_updateRatio >= 1.f)
 				{
-					g_refresh = true;
+					if (g_refeshAuto)
+						g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 					g_updateRatio = 0.f;
+					second = true;
 				}
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-				if (g_updateSearch || g_refresh)
+				if (g_updateSearch || g_updateType != UpdateType::NONE)
 				{
 					if (strlen(g_searchStr) > 0)
 					{
@@ -1551,7 +1574,7 @@ namespace LiveMemTracer
 			}
 			ImGui::End();
 
-			if (g_refresh)
+			if (second)
 			{
 				std::lock_guard<std::mutex> lock(g_mutex);
 				for (auto &h : g_histograms)
@@ -1569,6 +1592,11 @@ namespace LiveMemTracer
 					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				}
 			}
+
+			if (g_updateType == UpdateType::CURRENT_AND_NEXT_FRAME)
+				g_updateType = UpdateType::CURRENT_FRAME;
+			else if (g_updateType == UpdateType::CURRENT_FRAME)
+				g_updateType = UpdateType::NONE;
 		}
 	}
 }
