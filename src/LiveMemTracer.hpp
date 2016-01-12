@@ -78,7 +78,7 @@
 #ifndef LMT_DEBUG_DEV
 #define LMT_DEBUG_ASSERT(condition, message) do{}while(0)
 #else
-#define LMT_DEBUG_ASSERT(condition, message) assert(condition && message)
+#define LMT_DEBUG_ASSERT(condition, message) LMT_ASSERT(condition, message)
 #endif
 
 #ifndef LMT_IMPLEMENTED
@@ -231,6 +231,7 @@ namespace LiveMemTracer
 		Hash hash;
 		int64_t counter;
 		Alloc *stackAllocs[STACK_SIZE_PER_ALLOC];
+		void *allocHash[STACK_SIZE_PER_ALLOC];
 		uint8_t stackSize;
 		AllocStack() : hash(0), counter(0), stackSize(0) {}
 	};
@@ -307,14 +308,13 @@ namespace LiveMemTracer
 #endif
 	private:
 		Pair _buffer[Capacity];
-		static const size_t HASH_MODIFIER = 7;
 #ifdef LMT_DICTIONARY_STATS
 		mutable std::atomic_size_t _hitCount;
 		mutable std::atomic_size_t _hitTotal;
 		mutable std::atomic_size_t _size;
 #endif
 
-		LMT_INLINE size_t getHash(Key key) const
+		LMT_INLINE size_t getHash(const Key &key) const
 		{
 			for (size_t i = 0; i < Capacity; ++i)
 			{
@@ -331,6 +331,7 @@ namespace LiveMemTracer
 #ifdef LMT_DICTIONARY_STATS
 			_hitTotal += Capacity - 1;
 #endif
+			LMT_DEBUG_ASSERT(false, "LMT : Dictionnary is full.");
 			return HASH_INVALID;
 		}
 	};
@@ -354,7 +355,33 @@ namespace LiveMemTracer
 
 	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
 	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
-	static Dictionary<size_t, Edge, TREE_DICTIONARY_SIZE>       g_tree;
+
+	struct TreeKey
+	{
+		TreeKey()
+			: hash(0), str(0){}
+
+		TreeKey(Hash _hash, Hash _str)
+			: hash(_hash), str(_str)
+		{
+		}
+		TreeKey& operator=(const TreeKey &o)
+		{
+			this->hash = o.hash;
+			this->str = o.str;
+			return *this;
+		}
+		bool operator==(const TreeKey &o) const
+		{
+			return ((hash == o.hash)
+				&& (str == o.str ));
+		}
+		Hash operator+(Hash i) const { return (hash + i); }
+		Hash hash;
+		Hash str;
+	};
+
+	static Dictionary<TreeKey, Edge, TREE_DICTIONARY_SIZE>      g_tree;
 
 	static std::vector<Edge*>                                   g_allocStackRoots;
 	static std::mutex                                           g_mutex;
@@ -858,6 +885,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
 			auto found = g_allocRefTable.update(size_t(addr));
+			allocStack.allocHash[j] = addr;
 			if (found->getValue().shared != nullptr)
 			{
 				auto shared = found->getValue().shared;
@@ -921,7 +949,10 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 		currentHash = combineHash((size_t(previousPtr)), currentHash);
 		currentHash = combineHash(depth * depth, currentHash);
 
-		Edge *currentPtr = &g_tree.update(currentHash)->getValue();
+		TreeKey key(currentHash, Hash(allocStack.stackAllocs[stackSize]->str));
+
+		auto pair = g_tree.update(key);
+		Edge *currentPtr = &pair->getValue();
 		currentPtr->count += size;
 		if (checkTree)
 		{
@@ -1184,7 +1215,7 @@ namespace LiveMemTracer
 					ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.57f, 0.78f, 0.65f));
 					ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.4f, 0.57f, 0.78f, 0.85f));
 				}
-				bool opened = ImGui::CollapsingHeader("##dummy", "Coucou", true, false);
+				bool opened = ImGui::CollapsingHeader("##dummy", "NoName", true, false);
 				if (ImGui::BeginPopupContextItem("Options"))
 				{
 					if (ImGui::Selectable("Watch function"))

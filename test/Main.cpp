@@ -68,6 +68,7 @@ static WorkerThread g_workerThread;
 #define LMT_USE_MALLOC ::malloc
 #define LMT_USE_REALLOC ::realloc
 #define LMT_USE_FREE ::free
+#define LMT_DEBUG_DEV 1
 
 #define LMT_DICTIONARY_STATS 1
 
