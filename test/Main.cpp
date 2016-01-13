@@ -70,7 +70,7 @@ static WorkerThread g_workerThread;
 #define LMT_USE_FREE ::free
 #define LMT_DEBUG_DEV 1
 
-#define LMT_DICTIONARY_STATS 1
+#define LMT_STATS 1
 
 #define LMT_IMPL 1
 //#define SINGLE_THREADED 1

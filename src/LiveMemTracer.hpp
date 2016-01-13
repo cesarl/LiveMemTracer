@@ -150,7 +150,7 @@ namespace LiveMemTracer
 #if defined(LMT_PLATFORM_WINDOWS)
 #include "LiveMemTracer_Windows.hpp"
 #elif defined(LMT_PLATFORM_ORBIS)
-#include "LiveMemTracer_Orbis/LiveMemTracer_Orbis.hpp"
+#include "LiveMemTracer_Orbis.hpp"
 #endif
 
 #ifdef LMT_IMPL
@@ -283,14 +283,14 @@ namespace LiveMemTracer
 			{
 				pair->_hash = hash;
 				pair->_key = key;
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
 				_size.fetch_add(1);
 #endif
 			}
 			return pair;
 		}
 
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
 		LMT_INLINE float getHitStats() const
 		{
 			size_t total = _hitTotal;
@@ -306,7 +306,7 @@ namespace LiveMemTracer
 #endif
 	private:
 		Pair _buffer[Capacity];
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
 		mutable std::atomic_size_t _hitCount;
 		mutable std::atomic_size_t _hitTotal;
 		mutable std::atomic_size_t _size;
@@ -319,17 +319,17 @@ namespace LiveMemTracer
 				const size_t realHash = (key + i) % Capacity;
 				if (_buffer[realHash]._hash == HASH_EMPTY || _buffer[realHash]._key == key)
 				{
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
 					_hitCount += 1;
 					_hitTotal += i;
 #endif
 					return realHash;
 				}
 			}
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
 			_hitTotal += Capacity - 1;
 #endif
-			LMT_DEBUG_ASSERT(false, "LMT : Dictionnary is full.");
+			LMT_DEBUG_ASSERT(false, "LMT : Dictionary is full.");
 			return HASH_INVALID;
 		}
 	};
@@ -369,16 +369,21 @@ namespace LiveMemTracer
 		bool operator==(const TreeKey &o) const
 		{
 			return ((hash == o.hash)
-				&& (str == o.str ));
+				&& (str == o.str));
 		}
 		Hash operator+(Hash i) const { return (hash + i); }
 		Hash hash;
 		Hash str;
 	};
 
-	static Dictionary<Hash,    AllocStack, LMT_STACK_DICTIONARY_SIZE>       g_stackDictionary;
-	static Dictionary<Hash,    Alloc,      LMT_ALLOC_DICTIONARY_SIZE>       g_allocDictionary;
-	static Dictionary<TreeKey, Edge,       LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary;
+	static Dictionary<Hash, AllocStack, LMT_STACK_DICTIONARY_SIZE>       g_stackDictionary;
+	static Dictionary<Hash, Alloc, LMT_ALLOC_DICTIONARY_SIZE>       g_allocDictionary;
+	static Dictionary<TreeKey, Edge, LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary;
+
+#ifdef LMT_STATS
+	static std::atomic_size_t                                   g_userAllocations;
+	static std::atomic_size_t                                   g_realUserAllocations;
+#endif
 
 	static std::vector<Edge*>                                   g_allocStackRoots;
 	static std::mutex                                           g_mutex;
@@ -513,6 +518,13 @@ namespace LiveMemTracer
 #define GET_HEADER(ptr) (Header*)((void*)((size_t)ptr - HEADER_SIZE))
 #define GET_ALIGNED_PTR(ptr) (void*)(*(size_t*)((void*)(size_t(ptr) - ALIGNED_HEADER_SIZE)))
 #define GET_ALIGNED_SIZE(size, alignment) size + --alignment + ALIGNED_HEADER_SIZE
+#ifdef LMT_STATS
+#define LOG_REAL_SIZE_ALLOC(header, ptr) g_realUserAllocations.fetch_add(size_t(uint64_t(ptr) - uint64_t(header) + header->size)); g_userAllocations.fetch_add(header->size)
+#define LOG_REAL_SIZE_FREE(header, ptr)  g_realUserAllocations.fetch_sub(size_t(uint64_t(ptr) - uint64_t(header) + header->size)); g_userAllocations.fetch_sub(header->size)
+#else
+#define LOG_REAL_SIZE_ALLOC(header, ptr)
+#define LOG_REAL_SIZE_FREE(header, ptr)
+#endif
 	static LMT_INLINE void *REGISTER_ALIGNED_PTR(void *ptr, size_t alignment)
 	{
 		size_t t = (size_t)ptr + ALIGNED_HEADER_SIZE;
@@ -528,13 +540,15 @@ namespace LiveMemTracer
 void *LiveMemTracer::alloc(size_t size)
 {
 	void *ptr = LMT_USE_MALLOC(size + HEADER_SIZE);
+	void *userPtr = (void*)(size_t(ptr) + HEADER_SIZE);
 	LMT_ASSERT(ptr != nullptr, "Out of memory");
 	if (!ptr)
 		return nullptr;
 	Header *header = (Header*)(ptr);
 	logAllocInChunk(header, size);
+	LOG_REAL_SIZE_ALLOC(header, userPtr);
 	header->aligned = 0;
-	return (void*)(size_t(ptr) + HEADER_SIZE);
+	return userPtr;
 }
 
 void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
@@ -553,6 +567,7 @@ void *LiveMemTracer::allocAligned(size_t size, size_t alignment)
 
 	Header* header = GET_HEADER(o);
 	logAllocInChunk(header, size);
+	LOG_REAL_SIZE_ALLOC(header, o);
 	header->aligned = 1;
 	LMT_ASSERT(IS_ALIGNED(o, alignment + 1), "Not aligned");
 	LMT_ASSERT(o != nullptr, "");
@@ -578,16 +593,18 @@ void *LiveMemTracer::realloc(void *ptr, size_t size)
 	{
 		return ptr;
 	}
-
 	logFreeInChunk(header);
+	LOG_REAL_SIZE_FREE(header, ptr);
 	void *newPtr = LMT_USE_REALLOC((void*)header, size + HEADER_SIZE);
 	LMT_ASSERT(newPtr != nullptr, "Out of memory");
 	if (!newPtr)
 		return newPtr;
 	header = (Header*)(newPtr);
 	logAllocInChunk(header, size);
+	void *userPtr = (void*)(size_t(newPtr) + HEADER_SIZE);
+	LOG_REAL_SIZE_ALLOC(header, userPtr);
 	header->aligned = 0;
-	return (void*)(size_t(newPtr) + HEADER_SIZE);
+	return userPtr;
 }
 
 void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
@@ -640,6 +657,7 @@ void LiveMemTracer::dealloc(void *ptr)
 	Header *header = GET_HEADER(ptr);
 	LMT_DEBUG_ASSERT(header->aligned == 0, "Trying to free an aligned ptr with a non-aligned free");
 	logFreeInChunk(header);
+	LOG_REAL_SIZE_FREE(header, ptr);
 	LMT_USE_FREE((void*)header);
 }
 
@@ -650,6 +668,7 @@ void LiveMemTracer::deallocAligned(void *ptr)
 	Header *header = GET_HEADER(ptr);
 	LMT_DEBUG_ASSERT(header->aligned == 1, "Trying to free an non-aligned ptr with an aligned free");
 	logFreeInChunk(header);
+	LOG_REAL_SIZE_FREE(header, ptr);
 	LMT_USE_FREE(GET_ALIGNED_PTR(ptr));
 }
 
@@ -1599,10 +1618,12 @@ namespace LiveMemTracer
 					ImGui::BeginTooltip();
 					ImGui::Text("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
 					ImGui::Separator();
-#ifdef LMT_DICTIONARY_STATS
+#ifdef LMT_STATS
+					ImGui::Text("Total allocation asked : %0.2f Mo | Real allocation done : %0.2f Mo", float(g_userAllocations.load()) / 1024.f / 1024.f, float(g_realUserAllocations.load()) / 1024.f / 1024.f);
+					ImGui::Separator();
 					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE)", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio());
 					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE)", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio());
-					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)" , g_treeDictionary.getHitStats() , g_treeDictionary.getRatio());
+					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio());
 					ImGui::Separator();
 #endif
 					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
