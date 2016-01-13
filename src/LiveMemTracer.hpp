@@ -1,4 +1,10 @@
+/*
+LiveMemTracer
+Code and documentation https://github.com/cesarl/LiveMemTracer
+*/
+
 #pragma once
+
 
 #if defined(_WIN32) || defined(__WINDOWS__) || defined(__WIN32__)
 #define LMT_PLATFORM_WINDOWS
@@ -131,13 +137,6 @@ namespace LiveMemTracer
 		void init();
 	}
 #ifdef LMT_IMPL
-	static const size_t ALLOC_NUMBER_PER_CHUNK = LMT_ALLOC_NUMBER_PER_CHUNK;
-	static const size_t STACK_SIZE_PER_ALLOC = LMT_STACK_SIZE_PER_ALLOC;
-	static const size_t CHUNK_NUMBER = LMT_CHUNK_NUMBER_PER_THREAD;
-	static const size_t CACHE_SIZE = LMT_CACHE_SIZE;
-	static const size_t ALLOC_DICTIONARY_SIZE = LMT_ALLOC_DICTIONARY_SIZE;
-	static const size_t STACK_DICTIONARY_SIZE = LMT_STACK_DICTIONARY_SIZE;
-	static const size_t TREE_DICTIONARY_SIZE = LMT_TREE_DICTIONARY_SIZE;
 	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
 	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
@@ -202,14 +201,14 @@ namespace LiveMemTracer
 
 	struct Chunk
 	{
-		int64_t       allocSize[ALLOC_NUMBER_PER_CHUNK];
-		Hash          allocHash[ALLOC_NUMBER_PER_CHUNK];
-		size_t        allocStackIndex[ALLOC_NUMBER_PER_CHUNK];
-		uint8_t       allocStackSize[ALLOC_NUMBER_PER_CHUNK];
-		void         *stackBuffer[ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC];
-		size_t        allocIndex;
-		size_t        stackIndex;
-		Chunk         *next;
+		std::ptrdiff_t       allocSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		Hash                 allocHash[LMT_ALLOC_NUMBER_PER_CHUNK];
+		size_t               allocStackIndex[LMT_ALLOC_NUMBER_PER_CHUNK];
+		uint8_t              allocStackSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		void                 *stackBuffer[LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC];
+		size_t               allocIndex;
+		size_t               stackIndex;
+		Chunk                *next;
 		std::atomic<ChunkStatus> status;
 	};
 
@@ -217,8 +216,8 @@ namespace LiveMemTracer
 
 	struct Alloc
 	{
-		int64_t count;
-		int64_t countCache;
+		std::ptrdiff_t count;
+		std::ptrdiff_t countCache;
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
@@ -229,17 +228,16 @@ namespace LiveMemTracer
 	struct AllocStack
 	{
 		Hash hash;
-		int64_t counter;
-		Alloc *stackAllocs[STACK_SIZE_PER_ALLOC];
-		void *allocHash[STACK_SIZE_PER_ALLOC];
+		std::ptrdiff_t counter;
+		Alloc *stackAllocs[LMT_STACK_SIZE_PER_ALLOC];
 		uint8_t stackSize;
 		AllocStack() : hash(0), counter(0), stackSize(0) {}
 	};
 
 	struct Edge
 	{
-		int64_t count;
-		int64_t countCache;
+		std::ptrdiff_t count;
+		std::ptrdiff_t countCache;
 		Alloc *alloc;
 		std::vector<Edge*> to;
 		Edge *from;
@@ -344,17 +342,14 @@ namespace LiveMemTracer
 	};
 
 	LMT_TLS static Chunk                     *g_th_currentChunk = nullptr;
-	LMT_TLS static Chunk                     g_th_chunks[CHUNK_NUMBER];
+	LMT_TLS static Chunk                     g_th_chunks[LMT_CHUNK_NUMBER_PER_THREAD];
 	LMT_TLS static uint8_t                   g_th_chunkIndex = 0;
-	LMT_TLS static Hash                      g_th_cache[CACHE_SIZE];
+	LMT_TLS static Hash                      g_th_cache[LMT_CACHE_SIZE];
 	LMT_TLS static uint8_t                   g_th_cacheIndex = 0;
 	LMT_TLS static bool                      g_th_initialized = false;
 
 
 	static Alloc                                               *g_allocList = nullptr;
-
-	static Dictionary<Hash, AllocStack, STACK_DICTIONARY_SIZE>  g_allocStackRefTable;
-	static Dictionary<Hash, Alloc, ALLOC_DICTIONARY_SIZE>       g_allocRefTable;
 
 	struct TreeKey
 	{
@@ -381,7 +376,9 @@ namespace LiveMemTracer
 		Hash str;
 	};
 
-	static Dictionary<TreeKey, Edge, TREE_DICTIONARY_SIZE>      g_tree;
+	static Dictionary<Hash,    AllocStack, LMT_STACK_DICTIONARY_SIZE>       g_stackDictionary;
+	static Dictionary<Hash,    Alloc,      LMT_ALLOC_DICTIONARY_SIZE>       g_allocDictionary;
+	static Dictionary<TreeKey, Edge,       LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary;
 
 	static std::vector<Edge*>                                   g_allocStackRoots;
 	static std::mutex                                           g_mutex;
@@ -394,10 +391,10 @@ namespace LiveMemTracer
 		+ sizeof(g_th_cacheIndex);
 
 	static const size_t                                         g_internalSharedMemoryUsed =
-		sizeof(g_allocStackRefTable)
-		+ sizeof(g_allocRefTable)
+		sizeof(g_stackDictionary)
+		+ sizeof(g_allocDictionary)
 		+ sizeof(g_allocList)
-		+ sizeof(g_tree)
+		+ sizeof(g_treeDictionary)
 		+ sizeof(g_allocStackRoots)
 		+ sizeof(g_mutex)
 		+ sizeof(g_internalPerThreadMemoryUsed)
@@ -433,9 +430,9 @@ namespace LiveMemTracer
 			Edge  *call;
 			const char *name;
 			bool  isFunction;
-			int64_t count[HISTORY_FRAME_NUMBER];
+			std::ptrdiff_t count[HISTORY_FRAME_NUMBER];
 			size_t  cursor;
-			int64_t countCache;
+			std::ptrdiff_t countCache;
 			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), countCache(0)
 			{
 				memset(count, 0, sizeof(count));
@@ -466,27 +463,37 @@ namespace LiveMemTracer
 			CURRENT_AND_NEXT_FRAME
 		};
 
+		struct GroupedEdge
+		{
+			Alloc     *alloc;
+			ptrdiff_t  count;
+		};
+
 		static bool                                g_refeshAuto = true;
 		static UpdateType                          g_updateType = UpdateType::NONE;
 		static bool                                g_updateSearch = false;
 		static float                               g_updateRatio = 0.f;
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
-		static DisplayType                         g_displayType = DisplayType::CALLEE;
+		static DisplayType                         g_displayType = DisplayType::STACK;
 		static std::vector<Histogram>              g_histograms;
 		static Alloc                              *g_searchResult;
 		static Alloc                              *g_functionView;
+		static std::vector<GroupedEdge>            g_groupedEdges;
+		static std::vector<Edge*>                  g_sortedEdges;
 
 		bool searchAlloc();
-		void displayCallee(Edge *callee, bool callerTooltip);
+		void renderCallee(Edge *callee, bool callerTooltip);
 		void renderCallees();
 		void renderFunctionView();
 		void renderMenu();
 		void renderHistograms();
 		void renderStack();
+		void recursiveCacheData(Edge *edge);
+		void cacheData();
 		void createHistogram(Alloc *function);
 		void createHistogram(Edge  *functionCall);
-		void display(float dt);
+		void render(float dt);
 	}
 
 	static bool chunkIsNotFull(const Chunk *chunk);
@@ -496,7 +503,7 @@ namespace LiveMemTracer
 	static void logAllocInChunk(Header *header, size_t size);
 	static void logFreeInChunk(Header *header);
 	static void treatChunk(Chunk *chunk);
-	static void updateTree(AllocStack &alloc, int64_t size, bool checkTree);
+	static void updateTree(AllocStack &alloc, std::ptrdiff_t size, bool checkTree);
 }
 #endif
 
@@ -607,7 +614,7 @@ void *LiveMemTracer::reallocAligned(void *ptr, size_t size, size_t alignment)
 	void *newPtr = allocAligned(size, alignment);
 	if (!newPtr)
 		return nullptr;
-	memcpy(newPtr, ptr, oldHeader.size < size ? oldHeader.size : size);
+	memcpy(newPtr, ptr, size_t(oldHeader.size < size ? oldHeader.size : size));
 	deallocAligned(ptr);
 	LMT_ASSERT(IS_ALIGNED(newPtr, alignment), "");
 	LMT_ASSERT(newPtr != nullptr, "");
@@ -666,8 +673,8 @@ void LiveMemTracer::init()
 bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 {
 	return (chunk
-		&& chunk->allocIndex < ALLOC_NUMBER_PER_CHUNK
-		&& chunk->stackIndex < ALLOC_NUMBER_PER_CHUNK * STACK_SIZE_PER_ALLOC);
+		&& chunk->allocIndex < LMT_ALLOC_NUMBER_PER_CHUNK
+		&& chunk->stackIndex < LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC);
 }
 
 LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
@@ -692,13 +699,13 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 	// If it's not running we do not cycle around pre-allocated
 	// chunks, we just use them once.
 	if (status != RunningStatus::RUNNING
-		&& g_th_chunkIndex + 1 >= CHUNK_NUMBER)
+		&& g_th_chunkIndex + 1 >= LMT_CHUNK_NUMBER_PER_THREAD)
 	{
 		return nullptr;
 	}
 
 	// We get the next preallocated chunk
-	g_th_chunkIndex = (g_th_chunkIndex + 1) % CHUNK_NUMBER;
+	g_th_chunkIndex = (g_th_chunkIndex + 1) % LMT_CHUNK_NUMBER_PER_THREAD;
 	Chunk *chunk = &g_th_chunks[g_th_chunkIndex];
 
 	// If new chunk is pending for treatment we return nullptr
@@ -790,7 +797,7 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 {
 	int i = int(g_th_cacheIndex - 1);
 	if (i < 0)
-		i = CACHE_SIZE - 1;
+		i = LMT_CACHE_SIZE - 1;
 	uint8_t res = 1;
 	while (true)
 	{
@@ -800,8 +807,8 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 		}
 		i -= 1;
 		if (i < 0)
-			i = CACHE_SIZE - 1;
-		if (++res == CACHE_SIZE)
+			i = LMT_CACHE_SIZE - 1;
+		if (++res == LMT_CACHE_SIZE)
 			break;
 	}
 	return uint8_t(-1);
@@ -813,7 +820,7 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 
 	header->hash = 0;
 	void **stack = &chunk->stackBuffer[chunk->stackIndex];
-	uint32_t count = getCallstack(STACK_SIZE_PER_ALLOC, stack, &header->hash);
+	uint32_t count = getCallstack(LMT_STACK_SIZE_PER_ALLOC, stack, &header->hash);
 
 	header->size = size;
 
@@ -831,7 +838,7 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = count;
 	g_th_cache[g_th_cacheIndex] = header->hash;
-	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
+	g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
 	chunk->allocIndex += 1;
 	chunk->stackIndex += count;
 }
@@ -845,14 +852,14 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 	if (found != uint8_t(-1))
 	{
 		index = chunk->allocIndex - found - 1;
-		chunk->allocSize[index] -= header->size;
+		chunk->allocSize[index] -= std::ptrdiff_t(header->size);
 		return;
 	}
 
 	g_th_cache[g_th_cacheIndex] = header->hash;
-	g_th_cacheIndex = (g_th_cacheIndex + 1) % CACHE_SIZE;
+	g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
 	chunk->allocStackIndex[index] = -1;
-	chunk->allocSize[index] = -int64_t(header->size);
+	chunk->allocSize[index] = -std::ptrdiff_t(header->size);
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
@@ -866,7 +873,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		auto size = chunk->allocSize[i];
 		if (size == 0)
 			continue;
-		auto it = g_allocStackRefTable.update(chunk->allocHash[i]);
+		auto it = g_stackDictionary.update(chunk->allocHash[i]);
 		auto &allocStack = it->getValue();
 		if (allocStack.stackSize != 0)
 		{
@@ -884,8 +891,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
-			auto found = g_allocRefTable.update(size_t(addr));
-			allocStack.allocHash[j] = addr;
+			auto found = g_allocDictionary.update(size_t(addr));
 			if (found->getValue().shared != nullptr)
 			{
 				auto shared = found->getValue().shared;
@@ -902,7 +908,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			void *absoluteAddress = nullptr;
 			const char *name = SymbolGetter::getSymbol(addr, absoluteAddress);
 
-			auto shared = g_allocRefTable.update(size_t(absoluteAddress));
+			auto shared = g_allocDictionary.update(size_t(absoluteAddress));
 			if (shared->getValue().str != nullptr)
 			{
 				found->getValue().shared = &shared->getValue();
@@ -937,7 +943,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	}
 }
 
-void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkTree)
+void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool checkTree)
 {
 	int stackSize = allocStack.stackSize;
 	stackSize -= INTERNAL_FRAME_TO_SKIP;
@@ -951,7 +957,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, int64_t size, bool checkT
 
 		TreeKey key(currentHash, Hash(allocStack.stackAllocs[stackSize]->str));
 
-		auto pair = g_tree.update(key);
+		auto pair = g_treeDictionary.update(key);
 		Edge *currentPtr = &pair->getValue();
 		currentPtr->count += size;
 		if (checkTree)
@@ -1015,12 +1021,6 @@ namespace LiveMemTracer
 {
 	namespace Renderer
 	{
-		struct GroupedEdge
-		{
-			Alloc *alloc;
-			size_t count;
-		};
-
 		static bool SortGroupedEdge(const GroupedEdge &a, const GroupedEdge &b)
 		{
 			return a.count > b.count;
@@ -1031,9 +1031,7 @@ namespace LiveMemTracer
 			return a.alloc < b.alloc;
 		}
 
-		static std::vector<GroupedEdge> g_groupedEdges;
-
-		float formatMemoryString(int64_t sizeInBytes, const char *&str)
+		float formatMemoryString(std::ptrdiff_t sizeInBytes, const char *&str)
 		{
 			if (sizeInBytes < 0)
 			{
@@ -1042,12 +1040,12 @@ namespace LiveMemTracer
 			}
 			if (sizeInBytes < 10 * 1024)
 			{
-				str = "b";
+				str = "B";
 				return float(sizeInBytes);
 			}
 			else if (sizeInBytes < 10 * 1024 * 1024)
 			{
-				str = "Kb";
+				str = "KiB";
 				return sizeInBytes / 1024.f;
 			}
 			else
@@ -1129,7 +1127,7 @@ namespace LiveMemTracer
 			}
 		}
 
-		void displayCallee(Edge *callee, bool callerTooltip)
+		void renderCallee(Edge *callee, bool callerTooltip)
 		{
 			if (!callee)
 				return;
@@ -1137,10 +1135,12 @@ namespace LiveMemTracer
 			ImGui::PushID(callee);
 			const char *suffix;
 			if (g_updateType != UpdateType::NONE)
+			{
 				callee->countCache = callee->count;
+			}
 			float size = formatMemoryString(callee->countCache, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
-			const bool opened = ImGui::TreeNode(callee, "%f %s", size, suffix);
+			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
 			cursorPos.x += 150;
 			ImGui::SetCursorPos(cursorPos);
 			ImGui::Text("%s", callee->alloc->str);
@@ -1172,12 +1172,14 @@ namespace LiveMemTracer
 			}
 			if (opened)
 			{
-				if (g_updateType != UpdateType::NONE)
+				if (g_updateType != UpdateType::NONE || g_refeshAuto == false)
 				{
 					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
 				}
 				for (auto &to : callee->to)
-					displayCallee(to, callerTooltip);
+				{
+					renderCallee(to, callerTooltip);
+				}
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
@@ -1237,17 +1239,26 @@ namespace LiveMemTracer
 				const char *suffix;
 				float size = formatMemoryString(callee->countCache, suffix);
 				ImGui::SetCursorPos(cursorPos);
-				ImGui::Text("%f %s", size, suffix);
+				ImGui::Text("%4.0f %s", size, suffix);
 				cursorPos.x += 150 - 25;
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::Text("%s", callee->str);
 				if (opened)
 				{
+					g_sortedEdges.clear();
 					Edge *edge = callee->edges;
 					while (edge)
 					{
-						displayCallee(edge, true);
+						auto it = std::lower_bound(std::begin(g_sortedEdges), std::end(g_sortedEdges), edge, [](const Edge *a, const Edge *b){ return a->countCache > b->countCache; });
+						if (it == std::end(g_sortedEdges) || *it != edge)
+						{
+							g_sortedEdges.insert(it, edge);
+						}
 						edge = edge->same;
+					}
+					for (auto &e : g_sortedEdges)
+					{
+						renderCallee(e, true);
 					}
 				}
 				ImGui::PopID();
@@ -1274,6 +1285,10 @@ namespace LiveMemTracer
 				if (edge->from)
 				{
 					GroupedEdge group;
+					if (g_updateType != UpdateType::NONE)
+					{
+						edge->countCache = edge->count;
+					}
 					group.alloc = edge->from->alloc;
 					group.count = 0;
 
@@ -1283,8 +1298,6 @@ namespace LiveMemTracer
 						it = g_groupedEdges.insert(it, group);
 					}
 					total += edge->countCache;
-					if (g_updateType != UpdateType::NONE)
-						edge->countCache = edge->count;
 					it->count += edge->countCache;
 				}
 				edge = edge->same;
@@ -1297,7 +1310,7 @@ namespace LiveMemTracer
 				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
 				float size = formatMemoryString(caller.count, suffix);
-				ImGui::TextWrapped("%s\n%f%s", caller.alloc->str, size, suffix);
+				ImGui::TextWrapped("%s\n%4.0f%s", caller.alloc->str, size, suffix);
 				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
 				{
 					g_functionView = caller.alloc;
@@ -1323,9 +1336,11 @@ namespace LiveMemTracer
 
 			const char *suffix;
 			if (g_updateType != UpdateType::NONE)
+			{
 				g_functionView->countCache = g_functionView->count;
+			}
 			float size = formatMemoryString(g_functionView->countCache, suffix);
-			ImGui::TextWrapped("%s\n%f%s", g_functionView->str, size, suffix);
+			ImGui::TextWrapped("%s\n%4.0f%s", g_functionView->str, size, suffix);
 			ImGui::PushID(g_functionView);
 			if (ImGui::BeginPopupContextItem("Options"))
 			{
@@ -1351,6 +1366,10 @@ namespace LiveMemTracer
 				for (auto &to : edge->to)
 				{
 					GroupedEdge group;
+					if (g_updateType != UpdateType::NONE)
+					{
+						to->countCache = to->count;
+					}
 					group.alloc = to->alloc;
 					group.count = 0;
 
@@ -1359,8 +1378,7 @@ namespace LiveMemTracer
 					{
 						it = g_groupedEdges.insert(it, group);
 					}
-					if (g_updateType != UpdateType::NONE)
-						to->countCache = to->count;
+
 					it->count += to->countCache;
 					total += to->countCache;
 				}
@@ -1374,7 +1392,7 @@ namespace LiveMemTracer
 				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
 				float size = formatMemoryString(callee.count, suffix);
-				ImGui::TextWrapped("%s\n%f%s", callee.alloc->str, size, suffix);
+				ImGui::TextWrapped("%s\n%4.0f%s", callee.alloc->str, size, suffix);
 				ImGui::PushID(callee.alloc);
 				if (ImGui::BeginPopupContextItem("Options"))
 				{
@@ -1416,7 +1434,7 @@ namespace LiveMemTracer
 				ImGui::TextColored(h.isFunction ? ImColor(217, 164, 22) : ImColor(209, 6, 145), "%s", h.isFunction ? "Function" : "Call"); ImGui::SameLine();
 				const char *suffix;
 				float size = formatMemoryString(h.countCache, suffix);
-				ImGui::Text("%f %s", size, suffix);
+				ImGui::Text("%4.0f %s", size, suffix);
 				if (h.isFunction == false)
 				{
 					ImGui::SameLine();
@@ -1435,7 +1453,7 @@ namespace LiveMemTracer
 					ImGui::SetTooltip(h.name);
 				}
 				ImVec2 cursorPos = ImGui::GetCursorPos();
-				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, graphSize, sizeof(int64_t));
+				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, graphSize, sizeof(std::ptrdiff_t));
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::InvisibleButton("##invisibleButton", graphSize);
 				if (ImGui::IsItemHovered())
@@ -1451,7 +1469,7 @@ namespace LiveMemTracer
 					ImGui::BeginTooltip();
 					const char *ttSuffix;
 					float ttSize = formatMemoryString(h.count[itemIndex], ttSuffix);
-					ImGui::Text("%f %s", ttSize, ttSuffix);
+					ImGui::Text("%4.0f %s", ttSize, ttSuffix);
 					ImGui::EndTooltip();
 				}
 				ImGui::EndGroup();
@@ -1517,9 +1535,28 @@ namespace LiveMemTracer
 			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
 			for (auto &root : g_allocStackRoots)
 			{
-				displayCallee(root, false);
+				renderCallee(root, false);
 			}
 			ImGui::EndChild();
+		}
+
+		void recursiveCacheData(Edge *edge)
+		{
+			edge->alloc->countCache = edge->alloc->count;
+			for (auto &n : edge->to)
+			{
+				n->countCache = n->count;
+				recursiveCacheData(n);
+			}
+		}
+
+		void cacheData()
+		{
+			for (auto &r : g_allocStackRoots)
+			{
+				r->countCache = r->count;
+				recursiveCacheData(r);
+			}
 		}
 
 		void renderMenu()
@@ -1528,21 +1565,26 @@ namespace LiveMemTracer
 			{
 				ImGui::PushItemWidth(110.f);
 				ImGui::Combo("##ComboMode", (int*)&g_displayType, DisplayTypeStr, DisplayType::END); ImGui::SameLine();
-				ImGui::Checkbox("Refresh auto", &g_refeshAuto);
+				if (ImGui::Checkbox("Refresh auto", &g_refeshAuto))
+				{
+					if (!g_refeshAuto)
+					{
+						cacheData();
+					}
+				}
 				if (!g_refeshAuto)
 				{
 					ImGui::SameLine();
 					if (ImGui::Button("Refresh"))
-						g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
-				}
-				if (g_displayType != DisplayType::STACK)
-				{
-					ImGui::SameLine();
-					if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
 					{
-						g_displayType = DisplayType::CALLEE;
-						g_updateSearch = true;
+						cacheData();
 					}
+				}
+				ImGui::SameLine();
+				if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
+				{
+					g_displayType = DisplayType::CALLEE;
+					g_updateSearch = true;
 				}
 				size_t temporaryChunk = g_temporaryChunkCounter;
 				if (temporaryChunk > 0)
@@ -1556,11 +1598,14 @@ namespace LiveMemTracer
 				{
 					ImGui::BeginTooltip();
 					ImGui::Text("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+					ImGui::Separator();
 #ifdef LMT_DICTIONARY_STATS
-					ImGui::Text("allocStackRefTable %f | %f%%", g_allocStackRefTable.getHitStats(), g_allocStackRefTable.getRatio());
-					ImGui::Text("allocRefTable %f | %f%%", g_allocRefTable.getHitStats(), g_allocRefTable.getRatio());
-					ImGui::Text("tree %f | %f%%", g_tree.getHitStats(), g_tree.getRatio());
+					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE)", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio());
+					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE)", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio());
+					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)" , g_treeDictionary.getHitStats() , g_treeDictionary.getRatio());
+					ImGui::Separator();
 #endif
+					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
 					ImGui::EndTooltip();
 				}
 				ImGui::PopItemWidth();
@@ -1579,10 +1624,13 @@ namespace LiveMemTracer
 				ImGui::CaptureKeyboardFromApp();
 
 				renderMenu();
-				if (g_updateRatio >= 1.f)
+				if (g_updateRatio >= 0.333f)
 				{
 					if (g_refeshAuto)
-						g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
+					{
+						cacheData();
+						g_updateType = UpdateType::CURRENT_FRAME;
+					}
 					g_updateRatio = 0.f;
 					second = true;
 				}
