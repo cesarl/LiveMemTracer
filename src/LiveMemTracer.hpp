@@ -34,7 +34,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_REALLOC_ALIGNED(ptr, size, alignment)::LiveMemTracer::reallocAligned(ptr, size, alignment)
 #define LMT_DISPLAY(dt)::LiveMemTracer::display(dt)
 #define LMT_EXIT()::LiveMemTracer::exit()
-#define LMT_INIT()::LiveMemTracer::SymbolGetter::init(); ::LiveMemTracer::init()
+#define LMT_INIT() INTERNAL_SCOPE; ::LiveMemTracer::SymbolGetter::init(); ::LiveMemTracer::init()
 #define LMT_FLUSH()::LiveMemTracer::getChunk(true)
 
 #ifdef LMT_IMPL
@@ -104,14 +104,17 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 #undef LMT_INLINE
 #define LMT_TLS __declspec(thread)
 #define LMT_INLINE __forceinline
+#define LMT_ATOMIC_INITIALIZER(value) value
 #elif defined(LMT_PLATFORM_ORBIS)
 #undef LMT_TLS
 #undef LMT_INLINE
 #define LMT_TLS __thread
 #define LMT_INLINE __attribute__((__always_inline__))
+#define LMT_ATOMIC_INITIALIZER(value) {value}
 #else
 #define LMT_TLS
 #define LMT_INLINE
+#define LMT_ATOMIC_INITIALIZER(value)()
 #endif
 
 #include <stdint.h>
@@ -347,9 +350,10 @@ namespace LiveMemTracer
 	LMT_TLS static Hash                      g_th_cache[LMT_CACHE_SIZE];
 	LMT_TLS static uint8_t                   g_th_cacheIndex = 0;
 	LMT_TLS static bool                      g_th_initialized = false;
+	LMT_TLS static uint8_t                   g_th_lmt_internal_scope = 0;
 
 
-	static Alloc                                               *g_allocList = nullptr;
+	static Alloc                             *g_allocList = nullptr;
 
 	struct TreeKey
 	{
@@ -376,56 +380,49 @@ namespace LiveMemTracer
 		Hash str;
 	};
 
-	static Dictionary<Hash, AllocStack, LMT_STACK_DICTIONARY_SIZE>       g_stackDictionary;
-	static Dictionary<Hash, Alloc, LMT_ALLOC_DICTIONARY_SIZE>       g_allocDictionary;
+	static Dictionary<Hash, AllocStack, LMT_STACK_DICTIONARY_SIZE>    g_stackDictionary;
+	static Dictionary<Hash, Alloc, LMT_ALLOC_DICTIONARY_SIZE>         g_allocDictionary;
 	static Dictionary<TreeKey, Edge, LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary;
 
 #ifdef LMT_STATS
 	static std::atomic_size_t                                   g_userAllocations;
 	static std::atomic_size_t                                   g_realUserAllocations;
+	static std::atomic_size_t                                   g_internalAllocations;
 #endif
 
 	static std::vector<Edge*>                                   g_allocStackRoots;
 	static std::mutex                                           g_mutex;
 
+	static std::atomic<RunningStatus>                           g_runningStatus = LMT_ATOMIC_INITIALIZER(RunningStatus::NOT_INITIALIZED);
+	static std::atomic_size_t                                   g_temporaryChunkCounter = LMT_ATOMIC_INITIALIZER(0);
+
 	static const size_t                                         g_internalPerThreadMemoryUsed =
-		sizeof(g_th_chunks)
+		sizeof(g_th_currentChunk)
+		+ sizeof(g_th_chunks)
 		+ sizeof(g_th_chunkIndex)
 		+ sizeof(g_th_cache)
+		+ sizeof(g_th_cacheIndex)
 		+ sizeof(g_th_initialized)
-		+ sizeof(g_th_cacheIndex);
+		+ sizeof(g_th_lmt_internal_scope);
 
 	static const size_t                                         g_internalSharedMemoryUsed =
 		sizeof(g_stackDictionary)
 		+ sizeof(g_allocDictionary)
-		+ sizeof(g_allocList)
 		+ sizeof(g_treeDictionary)
+#ifdef LMT_STATS
+		+ sizeof(g_userAllocations)
+		+ sizeof(g_realUserAllocations)
+		+ sizeof(g_internalAllocations)
+#endif
+		+ sizeof(g_allocList)
 		+ sizeof(g_allocStackRoots)
 		+ sizeof(g_mutex)
 		+ sizeof(g_internalPerThreadMemoryUsed)
+		+ sizeof(g_runningStatus)
+		+ sizeof(g_temporaryChunkCounter)
 		+ sizeof(size_t) /* itself */;
 
-	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed =
-#if defined(LMT_PLATFORM_WINDOWS)
-		g_internalSharedMemoryUsed;
-#elif defined(LMT_PLATFORM_ORBIS)
-	{g_internalSharedMemoryUsed};
-#endif
-
-	static std::atomic<RunningStatus>                           g_runningStatus =
-#if defined(LMT_PLATFORM_WINDOWS)
-		RunningStatus::NOT_INITIALIZED;
-#elif defined(LMT_PLATFORM_ORBIS)
-	{RunningStatus::NOT_INITIALIZED};
-#endif
-
-	static std::atomic_size_t                                   g_temporaryChunkCounter =
-#if defined(LMT_PLATFORM_WINDOWS)
-		0;
-#elif defined(LMT_PLATFORM_ORBIS)
-	{0};
-#endif
-
+	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = LMT_ATOMIC_INITIALIZER(g_internalSharedMemoryUsed);
 
 	namespace Renderer
 	{
@@ -535,6 +532,18 @@ namespace LiveMemTracer
 	}
 #define IS_ALIGNED(POINTER, BYTE_COUNT) \
 	(((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
+
+#ifdef LMT_STATS
+	struct InternalScope
+	{
+		InternalScope()  { ++g_th_lmt_internal_scope; }
+		~InternalScope() { --g_th_lmt_internal_scope; }
+	};
+#define INTERNAL_SCOPE ::LiveMemTracer::InternalScope scopeGuard
+#define IS_IN_INTERNAL_SCOPE() g_th_lmt_internal_scope > 0
+#else
+#define INTERNAL_SCOPE;
+#endif
 }
 
 void *LiveMemTracer::alloc(size_t size)
@@ -702,6 +711,9 @@ LiveMemTracer::Chunk *LiveMemTracer::createTemporaryChunk()
 	LMT_ASSERT(ptr != nullptr, "Out of memory");
 	if (ptr == nullptr)
 		return nullptr;
+#ifdef LMT_STATS
+	g_internalAllocations.fetch_add(sizeof(Chunk));
+#endif
 	memset(ptr, 0, sizeof(Chunk));
 	Chunk *tmpChunk = new(ptr)Chunk;
 	memset(g_th_cache, 0, sizeof(g_th_cache));
@@ -835,6 +847,13 @@ uint8_t LiveMemTracer::findInCache(LiveMemTracer::Hash hash)
 
 void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 {
+#ifdef LMT_STATS
+	if (IS_IN_INTERNAL_SCOPE())
+	{
+		g_internalAllocations.fetch_add(size);
+	}
+#endif
+	INTERNAL_SCOPE;
 	Chunk *chunk = getChunk();
 
 	header->hash = 0;
@@ -864,6 +883,13 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 
 void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 {
+#ifdef LMT_STATS
+	if (IS_IN_INTERNAL_SCOPE())
+	{
+		g_internalAllocations.fetch_sub(header->size);
+	}
+#endif
+	INTERNAL_SCOPE;
 	Chunk *chunk = getChunk();
 
 	size_t index = chunk->allocIndex;
@@ -886,6 +912,7 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
+	INTERNAL_SCOPE;
 	std::lock_guard<std::mutex> lock(g_mutex);
 	for (size_t i = 0, iend = chunk->allocIndex; i < iend; ++i)
 	{
@@ -954,6 +981,9 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 	{
 		chunk->~Chunk();
 		LMT_USE_FREE(chunk);
+#ifdef LMT_STATS
+		g_internalAllocations.fetch_sub(sizeof(Chunk));
+#endif
 		g_temporaryChunkCounter.fetch_sub(1);
 	}
 	else
@@ -1616,7 +1646,8 @@ namespace LiveMemTracer
 				if (ImGui::IsItemHovered())
 				{
 					ImGui::BeginTooltip();
-					ImGui::Text("Memory used by LMT : %06f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+					ImGui::Text("LMT's static allocations : %0.2f Mo\n", float(g_internalAllThreadsMemoryUsed.load()) / 1024.f / 1024.f);
+					ImGui::Text("LMT's dynamic allocations : %0.2f Mo", float(g_internalAllocations.load()) / 1024.f / 1024.f);
 					ImGui::Separator();
 #ifdef LMT_STATS
 					ImGui::Text("Total allocation asked : %0.2f Mo | Real allocation done : %0.2f Mo", float(g_userAllocations.load()) / 1024.f / 1024.f, float(g_realUserAllocations.load()) / 1024.f / 1024.f);
@@ -1714,6 +1745,7 @@ namespace LiveMemTracer
 
 void LiveMemTracer::display(float dt)
 {
+	INTERNAL_SCOPE;
 	Renderer::render(dt);
 }
 #else
