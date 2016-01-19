@@ -12,7 +12,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_PLATFORM_ORBIS
 #endif
 
-#ifndef LMT_ENABLED
+#if LMT_ENABLED == 0
 #define LMT_ALLOC(size)::malloc(size)
 #define LMT_ALLOC_ALIGNED(size, alignment)::malloc(size)
 #define LMT_DEALLOC(ptr)::free(ptr)
@@ -24,7 +24,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_INIT()do{}while(0)
 #define LMT_FLUSH()do{}while(0)
 
-#else // LMT_ENABLED
+#else //LMT_ENABLED
 
 #define LMT_ALLOC(size)::LiveMemTracer::alloc(size)
 #define LMT_ALLOC_ALIGNED(size, alignment)::LiveMemTracer::allocAligned(size, alignment)
