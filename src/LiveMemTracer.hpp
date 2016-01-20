@@ -87,6 +87,10 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_DEBUG_ASSERT(condition, message) LMT_ASSERT(condition, message)
 #endif
 
+#if !defined(LMT_x86) && !defined(LMT_x64)
+static_assert(false, "You have to define platform type LMT_x64 or LMT_x86");
+#endif
+
 #ifndef LMT_IMPLEMENTED
 #define LMT_IMPLEMENTED 1
 #else
@@ -216,6 +220,29 @@ namespace LiveMemTracer
 	};
 
 	struct Edge;
+	struct Alloc;
+
+	struct EdgePtr
+	{
+		LMT_INLINE EdgePtr(uint32_t index = -1);
+		LMT_INLINE EdgePtr& operator=(const EdgePtr &o);
+		LMT_INLINE bool operator==(const EdgePtr &o) const;
+		LMT_INLINE Edge *operator->();
+		LMT_INLINE Edge *get();
+	private:
+		uint32_t _index;
+	};
+
+	struct AllocPtr
+	{
+		LMT_INLINE AllocPtr(uint32_t index = -1);
+		LMT_INLINE AllocPtr& operator=(const AllocPtr &o);
+		LMT_INLINE bool operator==(const AllocPtr &o) const;
+		LMT_INLINE Alloc *operator->();
+		LMT_INLINE Alloc *get();
+	private:
+		uint32_t _index;
+	};
 
 	struct Alloc
 	{
@@ -223,16 +250,16 @@ namespace LiveMemTracer
 		std::ptrdiff_t countCache;
 		const char *str;
 		Alloc *next;
-		Alloc *shared;
-		Edge  *edges;
-		Alloc() : count(0), countCache(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
+		AllocPtr shared;
+		EdgePtr edges;
+		Alloc() : count(0), countCache(0), str(nullptr), next(nullptr) {}
 	};
 
 	struct AllocStack
 	{
 		Hash hash;
 		std::ptrdiff_t counter;
-		Alloc *stackAllocs[LMT_STACK_SIZE_PER_ALLOC];
+		AllocPtr stackAllocs[LMT_STACK_SIZE_PER_ALLOC];
 		uint8_t stackSize;
 		AllocStack() : hash(0), counter(0), stackSize(0) {}
 	};
@@ -241,20 +268,20 @@ namespace LiveMemTracer
 	{
 		std::ptrdiff_t count;
 		std::ptrdiff_t countCache;
-		Alloc *alloc;
+		AllocPtr alloc;
 		std::vector<Edge*> to;
-		Edge *from;
-		Edge *same;
+		EdgePtr from;
+		EdgePtr same;
 		uint8_t depth;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr) {}
+		Edge() : count(0) {}
 	};
 
-	template <typename Key, typename Value, size_t Capacity>
+	template <typename Key, typename Value, uint32_t Capacity>
 	class Dictionary
 	{
 	public:
-		static const size_t   HASH_EMPTY = Hash(-1);
-		static const size_t   HASH_INVALID = Hash(-2);
+		static const uint32_t   HASH_EMPTY = uint32_t(-1);
+		static const uint32_t   HASH_INVALID = uint32_t(-2);
 
 		Dictionary()
 		{
@@ -263,34 +290,43 @@ namespace LiveMemTracer
 		class Pair
 		{
 		private:
-			Hash  _hash;
-			Key   _key;
-			Value _value;
+			uint32_t  _hash;
+			Key       _key;
+			Value     _value;
 			Pair() : _hash(HASH_EMPTY) {}
 		public:
 			LMT_INLINE Value &getValue() { return _value; }
+			LMT_INLINE Value *getValuePtr() { return &_value; }
 			friend class Dictionary;
 		};
 
-		Pair *update(const Key &key)
+		Pair *update(const Key &key, uint32_t &index)
 		{
-			const size_t hash = getHash(key);
-			if (hash == HASH_INVALID)
+			index = getHash(key);
+			if (index == HASH_INVALID)
 			{
 				static Pair fakePair;
 				return &fakePair;
 			}
 
-			Pair *pair = &_buffer[hash];
+			Pair *pair = &_buffer[index];
 			if (pair->_hash == HASH_EMPTY)
 			{
-				pair->_hash = hash;
+				pair->_hash = index;
 				pair->_key = key;
 #ifdef LMT_STATS
 				_size.fetch_add(1);
 #endif
 			}
+#ifdef LMT_x86
+			index = (uint32_t)pair->getValuePtr();
+#endif
 			return pair;
+		}
+
+		Value *get(uint32_t index)
+		{
+			return _buffer[index].getValuePtr();
 		}
 
 #ifdef LMT_STATS
@@ -315,11 +351,11 @@ namespace LiveMemTracer
 		mutable std::atomic_size_t _size;
 #endif
 
-		LMT_INLINE size_t getHash(const Key &key) const
+		LMT_INLINE uint32_t getHash(const Key &key) const
 		{
-			for (size_t i = 0; i < Capacity; ++i)
+			for (uint32_t i = 0; i < Capacity; ++i)
 			{
-				const size_t realHash = (key + i) % Capacity;
+				const uint32_t realHash = (key + i) % Capacity;
 				if (_buffer[realHash]._hash == HASH_EMPTY || _buffer[realHash]._key == key)
 				{
 #ifdef LMT_STATS
@@ -375,7 +411,7 @@ namespace LiveMemTracer
 			return ((hash == o.hash)
 				&& (str == o.str));
 		}
-		Hash operator+(Hash i) const { return (hash + i); }
+		uint32_t operator+(Hash i) const { return (uint32_t(hash) + i); }
 		Hash hash;
 		Hash str;
 	};
@@ -423,6 +459,84 @@ namespace LiveMemTracer
 		+ sizeof(size_t) /* itself */;
 
 	static std::atomic_size_t                                   g_internalAllThreadsMemoryUsed = LMT_ATOMIC_INITIALIZER(g_internalSharedMemoryUsed);
+
+	// EdgePtr
+	EdgePtr::EdgePtr(uint32_t index)
+		: _index(index)
+	{
+
+	}
+	EdgePtr& EdgePtr::operator=(const EdgePtr &o)
+	{
+		this->_index = o._index;
+		return *this;
+	}
+
+	bool EdgePtr::operator==(const EdgePtr &o) const
+	{
+		return (this->_index == o._index);
+	}
+
+	Edge *EdgePtr::operator->()
+	{
+		if (_index == -1)
+			return nullptr;
+#ifdef LMT_x86
+		return (Edge*)(_index);
+#else
+		return g_treeDictionary.get(_index);
+#endif // LMT_x86
+	}
+
+	Edge *EdgePtr::get()
+	{
+		if (_index == -1)
+			return nullptr;
+#ifdef LMT_x86
+		return (Edge*)_index;
+#else
+		return g_treeDictionary.get(_index);
+#endif
+	}
+
+	// AllocPtr
+	AllocPtr::AllocPtr(uint32_t index)
+		: _index(index)
+	{
+
+	}
+	AllocPtr& AllocPtr::operator=(const AllocPtr &o)
+	{
+		this->_index = o._index;
+		return *this;
+	}
+
+	bool AllocPtr::operator==(const AllocPtr &o) const
+	{
+		return (this->_index == o._index);
+	}
+
+	Alloc *AllocPtr::operator->()
+	{
+		if (_index == -1)
+			return nullptr;
+#ifdef LMT_x86
+		return (Alloc*)_index;
+#else
+		return g_allocDictionary.get(_index);
+#endif
+	}
+
+	Alloc *AllocPtr::get()
+	{
+		if (_index == -1)
+			return nullptr;
+#ifdef LMT_x86
+		return (Alloc*)_index;
+#else
+		return g_allocDictionary.get(_index);
+#endif
+	}
 
 	namespace Renderer
 	{
@@ -919,7 +1033,8 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		auto size = chunk->allocSize[i];
 		if (size == 0)
 			continue;
-		auto it = g_stackDictionary.update(chunk->allocHash[i]);
+		uint32_t index;
+		auto it = g_stackDictionary.update(chunk->allocHash[i], index);
 		auto &allocStack = it->getValue();
 		if (allocStack.stackSize != 0)
 		{
@@ -937,8 +1052,9 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
-			auto found = g_allocDictionary.update(size_t(addr));
-			if (found->getValue().shared != nullptr)
+			uint32_t index;
+			auto found = g_allocDictionary.update(size_t(addr), index);
+			if (found->getValue().shared.get() != nullptr)
 			{
 				auto shared = found->getValue().shared;
 				shared->count += size;
@@ -947,18 +1063,18 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			}
 			if (found->getValue().str != nullptr)
 			{
-				allocStack.stackAllocs[j] = &found->getValue();
+				allocStack.stackAllocs[j] = index;
 				found->getValue().count += size;
 				continue;
 			}
 			void *absoluteAddress = nullptr;
 			const char *name = SymbolGetter::getSymbol(addr, absoluteAddress);
 
-			auto shared = g_allocDictionary.update(size_t(absoluteAddress));
+			auto shared = g_allocDictionary.update(size_t(absoluteAddress), index);
 			if (shared->getValue().str != nullptr)
 			{
-				found->getValue().shared = &shared->getValue();
-				allocStack.stackAllocs[j] = &shared->getValue();
+				found->getValue().shared = AllocPtr(index);
+				allocStack.stackAllocs[j] = index;
 				shared->getValue().count += size;
 #ifdef LMT_PLATFORM_WINDOWS
 				if (name != TRUNCATED_STACK_NAME)
@@ -967,10 +1083,10 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 				continue;
 			}
 
-			found->getValue().shared = &shared->getValue();
+			found->getValue().shared = AllocPtr(index);
 			shared->getValue().str = name;
 			shared->getValue().count = size;
-			allocStack.stackAllocs[j] = &shared->getValue();
+			allocStack.stackAllocs[j] = index;
 			shared->getValue().next = g_allocList;
 			g_allocList = &shared->getValue();
 		}
@@ -1000,23 +1116,24 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
-		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
+		Hash currentHash = size_t(allocStack.stackAllocs[stackSize].get());
 		currentHash = combineHash((size_t(previousPtr)), currentHash);
 		currentHash = combineHash(depth * depth, currentHash);
 
 		TreeKey key(currentHash, Hash(allocStack.stackAllocs[stackSize]->str));
 
-		auto pair = g_treeDictionary.update(key);
+		uint32_t index;
+		auto pair = g_treeDictionary.update(key, index);
 		Edge *currentPtr = &pair->getValue();
 		currentPtr->count += size;
 		if (checkTree)
 		{
-			if (!currentPtr->alloc)
+			if (!currentPtr->alloc.get())
 			{
-				LMT_DEBUG_ASSERT(currentPtr->same == nullptr, "Edge already have a same pointer defined.");
+				LMT_DEBUG_ASSERT(currentPtr->same.get() == nullptr, "Edge already have a same pointer defined.");
 				currentPtr->alloc = allocStack.stackAllocs[stackSize];
-				currentPtr->same = allocStack.stackAllocs[stackSize]->edges;
-				allocStack.stackAllocs[stackSize]->edges = currentPtr;
+				currentPtr->same = currentPtr->alloc->edges;
+				currentPtr->alloc->edges = index;
 			}
 
 			if (previousPtr != nullptr)
@@ -1026,7 +1143,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 				{
 					previousPtr->to.push_back(currentPtr);
 				}
-				currentPtr->from = previousPtr;
+				currentPtr->from = index;
 			}
 			else
 			{
@@ -1162,8 +1279,8 @@ namespace LiveMemTracer
 			if (!from)
 				return;
 			size_t depthCopy = depth;
-			displayCallerTooltip(from->from, ++depth);
-			if (from->from)
+			displayCallerTooltip(from->from.get(), ++depth);
+			if (from->from.get())
 				ImGui::Indent();
 			ImGui::Text(from->alloc->str);
 			if (depthCopy == 0)
@@ -1197,7 +1314,7 @@ namespace LiveMemTracer
 			{
 				ImGui::BeginTooltip();
 				size_t depth;
-				displayCallerTooltip(callee->from, depth);
+				displayCallerTooltip(callee->from.get(), depth);
 				ImGui::EndTooltip();
 			}
 			if (ImGui::BeginPopupContextItem("Options"))
@@ -1208,12 +1325,12 @@ namespace LiveMemTracer
 				}
 				if (ImGui::Selectable("Watch function"))
 				{
-					createHistogram(callee->alloc);
+					createHistogram(callee->alloc.get());
 					g_displayType = DisplayType::HISTOGRAMS;
 				}
 				if (ImGui::Selectable("Function view"))
 				{
-					g_functionView = callee->alloc;
+					g_functionView = callee->alloc.get();
 					g_displayType = DisplayType::FUNCTION;
 					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
@@ -1245,7 +1362,7 @@ namespace LiveMemTracer
 			int i = 0;
 			while (callee)
 			{
-				if (!callee->edges)
+				if (!callee->edges.get())
 				{
 					callee = callee->next;
 					continue;
@@ -1295,7 +1412,7 @@ namespace LiveMemTracer
 				if (opened)
 				{
 					g_sortedEdges.clear();
-					Edge *edge = callee->edges;
+					Edge *edge = callee->edges.get();
 					while (edge)
 					{
 						auto it = std::lower_bound(std::begin(g_sortedEdges), std::end(g_sortedEdges), edge, [](const Edge *a, const Edge *b){ return a->countCache > b->countCache; });
@@ -1303,7 +1420,7 @@ namespace LiveMemTracer
 						{
 							g_sortedEdges.insert(it, edge);
 						}
-						edge = edge->same;
+						edge = edge->same.get();
 					}
 					for (auto &e : g_sortedEdges)
 					{
@@ -1325,20 +1442,20 @@ namespace LiveMemTracer
 
 			//////////////////////////////////////////////////////////////////////////
 			// CALLERS
-			Edge *edge = g_functionView->edges;
+			Edge *edge = g_functionView->edges.get();
 			size_t total = 0;
 			g_groupedEdges.clear();
 
 			while (edge)
 			{
-				if (edge->from)
+				if (edge->from.get())
 				{
 					GroupedEdge group;
 					if (g_updateType != UpdateType::NONE)
 					{
 						edge->countCache = edge->count;
 					}
-					group.alloc = edge->from->alloc;
+					group.alloc = edge->from->alloc.get();
 					group.count = 0;
 
 					auto it = std::lower_bound(std::begin(g_groupedEdges), std::end(g_groupedEdges), group, InsertSortedEdge);
@@ -1349,7 +1466,7 @@ namespace LiveMemTracer
 					total += edge->countCache;
 					it->count += edge->countCache;
 				}
-				edge = edge->same;
+				edge = edge->same.get();
 			}
 
 			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
@@ -1406,7 +1523,7 @@ namespace LiveMemTracer
 			// CALLEE
 			ImGui::NextColumn();
 
-			edge = g_functionView->edges;
+			edge = g_functionView->edges.get();
 			g_groupedEdges.clear();
 			total = 0;
 
@@ -1419,7 +1536,7 @@ namespace LiveMemTracer
 					{
 						to->countCache = to->count;
 					}
-					group.alloc = to->alloc;
+					group.alloc = to->alloc.get();
 					group.count = 0;
 
 					auto it = std::lower_bound(std::begin(g_groupedEdges), std::end(g_groupedEdges), group, InsertSortedEdge);
@@ -1431,7 +1548,7 @@ namespace LiveMemTracer
 					it->count += to->countCache;
 					total += to->countCache;
 				}
-				edge = edge->same;
+				edge = edge->same.get();
 			}
 
 			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
@@ -1492,7 +1609,7 @@ namespace LiveMemTracer
 					{
 						ImGui::BeginTooltip();
 						size_t depth;
-						displayCallerTooltip(h.call->from, depth);
+						displayCallerTooltip(h.call->from.get(), depth);
 						ImGui::EndTooltip();
 					}
 				}
@@ -1652,9 +1769,9 @@ namespace LiveMemTracer
 #ifdef LMT_STATS
 					ImGui::Text("Total allocation asked : %0.2f Mo | Real allocation done : %0.2f Mo", float(g_userAllocations.load()) / 1024.f / 1024.f, float(g_realUserAllocations.load()) / 1024.f / 1024.f);
 					ImGui::Separator();
-					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE)", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio());
-					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE)", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio());
-					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio());
+					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE) | %0.2f Mo", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio(), sizeof(g_stackDictionary) / 1024.f / 1024.f);
+					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE) | %0.2f Mo", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio(), sizeof(g_allocDictionary) / 1024.f / 1024.f);
+					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)  | %0.2f Mo", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio(), sizeof(g_treeDictionary) / 1024.f / 1024.f);
 					ImGui::Separator();
 #endif
 					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
