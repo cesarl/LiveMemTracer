@@ -1330,12 +1330,14 @@ namespace LiveMemTracer
 				const char *suffix;
 				float size = formatMemoryString(caller.count, suffix);
 				ImGui::TextWrapped("%s\n%4.0f%s", caller.alloc->str, size, suffix);
-				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+				ImVec2 cursorPosNext = ImGui::GetCursorScreenPos();
+				ImGui::SetCursorScreenPos(cursorPos);
+				ImGui::PushID(caller.alloc);
+				if (ImGui::InvisibleButton("##invisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
 				{
 					g_functionView = caller.alloc;
 					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
 				}
-				ImGui::PushID(caller.alloc);
 				if (ImGui::BeginPopupContextItem("Options"))
 				{
 					if (ImGui::Selectable("Watch function"))
@@ -1412,7 +1414,14 @@ namespace LiveMemTracer
 				const char *suffix;
 				float size = formatMemoryString(callee.count, suffix);
 				ImGui::TextWrapped("%s\n%4.0f%s", callee.alloc->str, size, suffix);
+				ImVec2 cursorPosNext = ImGui::GetCursorScreenPos();
+				ImGui::SetCursorScreenPos(cursorPos);
 				ImGui::PushID(callee.alloc);
+				if (ImGui::InvisibleButton("##invisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
+				{
+					g_functionView = callee.alloc;
+					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
+				}
 				if (ImGui::BeginPopupContextItem("Options"))
 				{
 					if (ImGui::Selectable("Watch function"))
@@ -1423,11 +1432,6 @@ namespace LiveMemTracer
 					ImGui::EndPopup();
 				}
 				ImGui::PopID();
-				if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
-				{
-					g_functionView = callee.alloc;
-					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
-				}
 				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(callee.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
 
