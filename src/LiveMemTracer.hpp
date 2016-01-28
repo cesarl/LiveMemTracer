@@ -121,7 +121,7 @@ static_assert(false, "You have to define platform. Only Orbis and Windows are su
 
 namespace LiveMemTracer
 {
-	typedef size_t Hash;
+	typedef uint32_t Hash;
 
 	LMT_INLINE void *alloc(size_t size);
 	LMT_INLINE void *allocAligned(size_t size, size_t alignment);
@@ -185,6 +185,66 @@ namespace LiveMemTracer
 		return nullptr;
 	}
 
+	static size_t vectorAllocation = 0;
+
+	template <typename T>
+	class LMTVector
+	{
+	public:
+		LMTVector(const LMTVector &o) = delete;
+		LMTVector(LMTVector &&o) = delete;
+		LMTVector &operator=(const LMTVector &o) = delete;
+		LMTVector &operator=(LMTVector &&o) = delete;
+		LMTVector() : _data(nullptr), _size(0), _capacity(0) {}
+		~LMTVector()
+		{
+			for (uint16_t i = 0; i < _size; ++i)
+			{
+				_data[i].~T();
+			}
+			LMT_DEALLOC(_data);
+		}
+		void push_back(const T &o)
+		{
+			// TODO log
+			if (_size >= _capacity)
+			{
+				reserve(_capacity ? _capacity * 2 : 4);
+			}
+			new (&_data[_size++]) T(o);
+		}
+		LMT_INLINE void resize(size_t size)
+		{
+			if (size <= _capacity && size >= _size)
+			{
+				_size = size;
+				return;
+			}
+			reserve(size);
+			_size = size;
+		}
+		LMT_INLINE T &operator[](size_t i) { return _data[i]; }
+		LMT_INLINE const T &operator[](size_t i) const { return _data[i]; }
+		LMT_INLINE T *begin() { return _data; }
+		LMT_INLINE T *end() { return _data + _size; }
+		LMT_INLINE const T *begin() const { return _data; }
+		LMT_INLINE const T *end() const { return _data + _size; }
+	private:
+		LMT_INLINE void reserve(size_t capacity)
+		{
+			vectorAllocation -= _capacity * sizeof(T);
+			_capacity = capacity;
+			T *newData = (T*)LMT_ALLOC(_capacity * sizeof(T));
+			memcpy(newData, _data, _size * sizeof(T));
+			LMT_DEALLOC(_data);
+			_data = newData;
+			vectorAllocation += _capacity * sizeof(T);
+		}
+		T        *_data;
+		uint16_t _size;
+		uint16_t _capacity;
+	};
+
 	struct Header
 	{
 		Hash      hash;
@@ -230,9 +290,9 @@ namespace LiveMemTracer
 
 	struct AllocStack
 	{
-		Hash hash;
 		std::ptrdiff_t counter;
-		Alloc *stackAllocs[LMT_STACK_SIZE_PER_ALLOC];
+		LMTVector<Alloc*> stackAllocs;
+		Hash hash;
 		uint8_t stackSize;
 		AllocStack() : hash(0), counter(0), stackSize(0) {}
 	};
@@ -242,7 +302,7 @@ namespace LiveMemTracer
 		std::ptrdiff_t count;
 		std::ptrdiff_t countCache;
 		Alloc *alloc;
-		std::vector<Edge*> to;
+		LMTVector<Edge*> to;
 		Edge *from;
 		Edge *same;
 		uint8_t depth;
@@ -933,7 +993,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		}
 		allocStack.counter = size;
 		allocStack.hash = chunk->allocHash[i];
-
+		allocStack.stackAllocs.resize(chunk->allocStackSize[i]);
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
@@ -1021,7 +1081,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 
 			if (previousPtr != nullptr)
 			{
-				auto it = std::find(std::begin(previousPtr->to), std::end(previousPtr->to), currentPtr);
+				auto it = std::find(previousPtr->to.begin(), previousPtr->to.end(), currentPtr);
 				if (it == std::end(previousPtr->to))
 				{
 					previousPtr->to.push_back(currentPtr);
@@ -1659,6 +1719,7 @@ namespace LiveMemTracer
 					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE) | %0.2f Mo", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio(), sizeof(g_stackDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE) | %0.2f Mo", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio(), sizeof(g_allocDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)  | %0.2f Mo", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio(), sizeof(g_treeDictionary) / 1024.f / 1024.f);
+					ImGui::Text("Vector Alloc a l'arrache %0.2f Mo", vectorAllocation / 1024.f / 1024.f);
 					ImGui::Separator();
 #endif
 					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
