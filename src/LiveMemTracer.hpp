@@ -97,6 +97,14 @@ static_assert(false, "LMT is already implemented, do not define LMT_IMPL more th
 static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
 #endif
 
+#if !defined(LMT_PLATFORM_WINDOWS) && !defined(LMT_PLATFORM_ORBIS)
+static_assert(false, "You have to define platform. Only Orbis and Windows are supported for now.");
+#endif
+
+#if (!defined(LMT_x64) && !defined(LMT_x86)) || (defined(LMT_x64) && defined(LMT_x86))
+static_assert(false, "You have to define if target is x64 or x86");
+#endif
+
 #endif
 
 #if defined(LMT_PLATFORM_WINDOWS) 
@@ -145,8 +153,8 @@ namespace LiveMemTracer
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 	static const char  *UNKNOWN_STACK_NAME = "Unknown\0";
 	static const size_t HISTORY_FRAME_NUMBER = 120;
-	template <class T> LMT_INLINE size_t combineHash(const T& val, const size_t baseHash = 2166136261U);
-	static uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash);
+	template <class T> LMT_INLINE Hash combineHash(const T& val, const Hash baseHash = 2166136261U);
+	static uint32_t getCallstack(uint32_t maxStackSize, void **stack, Hash *hash);
 #endif
 }
 
@@ -191,10 +199,6 @@ namespace LiveMemTracer
 	class LMTVector
 	{
 	public:
-		LMTVector(const LMTVector &o) = delete;
-		LMTVector(LMTVector &&o) = delete;
-		LMTVector &operator=(const LMTVector &o) = delete;
-		LMTVector &operator=(LMTVector &&o) = delete;
 		LMTVector() : _data(nullptr), _size(0), _capacity(0) {}
 		~LMTVector()
 		{
@@ -209,7 +213,7 @@ namespace LiveMemTracer
 			}
 			new (&_data[_size++]) T(o);
 		}
-		LMT_INLINE void resize(size_t size)
+		LMT_INLINE void resize(Hash size)
 		{
 			if (size <= _capacity && size >= _size)
 			{
@@ -234,7 +238,7 @@ namespace LiveMemTracer
 		LMT_INLINE const T *begin() const { return _data; }
 		LMT_INLINE const T *end() const { return _data + _size; }
 	private:
-		LMT_INLINE void reserve(size_t capacity)
+		LMT_INLINE void reserve(Hash capacity)
 		{
 			vectorAllocation -= _capacity * sizeof(T);
 			_capacity = capacity;
@@ -247,6 +251,11 @@ namespace LiveMemTracer
 		T        *_data;
 		uint16_t _size;
 		uint16_t _capacity;
+
+		LMTVector(const LMTVector &o);
+		LMTVector(LMTVector &&o);
+		LMTVector &operator=(const LMTVector &o);
+		LMTVector &operator=(LMTVector &&o);
 	};
 
 	struct Header
@@ -324,7 +333,7 @@ namespace LiveMemTracer
 		}
 	};
 
-	template <typename Key, typename Value, size_t Capacity>
+	template <typename Key, typename Value, Hash Capacity>
 	class Dictionary
 	{
 	public:
@@ -349,7 +358,7 @@ namespace LiveMemTracer
 
 		Pair *update(const Key &key)
 		{
-			const size_t hash = getHash(key);
+			const Hash hash = getHash(key);
 			if (hash == HASH_INVALID)
 			{
 				static Pair fakePair;
@@ -390,11 +399,11 @@ namespace LiveMemTracer
 		mutable std::atomic_size_t _size;
 #endif
 
-		LMT_INLINE size_t getHash(const Key &key) const
+		LMT_INLINE Hash getHash(const Key &key) const
 		{
-			for (size_t i = 0; i < Capacity; ++i)
+			for (Hash i = 0; i < Capacity; ++i)
 			{
-				const size_t realHash = (key + i) % Capacity;
+				const Hash realHash = (key + i) % Capacity;
 				if (_buffer[realHash]._hash == HASH_EMPTY || _buffer[realHash]._key == key)
 				{
 #ifdef LMT_STATS
@@ -508,7 +517,7 @@ namespace LiveMemTracer
 			const char *name;
 			bool  isFunction;
 			std::ptrdiff_t count[HISTORY_FRAME_NUMBER];
-			size_t  cursor;
+			int  cursor;
 			std::ptrdiff_t countCache;
 			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), countCache(0)
 			{
@@ -774,7 +783,11 @@ void LiveMemTracer::init()
 // IMPL ONLY : 
 //////////////////////////////////////////////////////////////////////////
 
-
+#ifdef LMT_x64
+#define LMT_HASH_FROM_PTR(ptr) combineHash(ptr)
+#else
+#define LMT_HASH_FROM_PTR(ptr) Hash(ptr)
+#endif
 
 bool LiveMemTracer::chunkIsNotFull(const Chunk *chunk)
 {
@@ -1015,7 +1028,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
 		{
 			void *addr = chunk->stackBuffer[chunk->allocStackIndex[i] + j];
-			auto found = g_allocDictionary.update(size_t(addr));
+			auto found = g_allocDictionary.update(LMT_HASH_FROM_PTR(addr));
 			if (found->getValue().shared != nullptr)
 			{
 				auto shared = found->getValue().shared;
@@ -1032,7 +1045,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			void *absoluteAddress = nullptr;
 			const char *name = SymbolGetter::getSymbol(addr, absoluteAddress);
 
-			auto shared = g_allocDictionary.update(size_t(absoluteAddress));
+			auto shared = g_allocDictionary.update(LMT_HASH_FROM_PTR(absoluteAddress));
 			if (shared->getValue().str != nullptr)
 			{
 				found->getValue().shared = &shared->getValue();
@@ -1078,11 +1091,11 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 	Edge *previousPtr = nullptr;
 	while (stackSize >= 0)
 	{
-		Hash currentHash = size_t(allocStack.stackAllocs[stackSize]);
+		Hash currentHash = LMT_HASH_FROM_PTR(allocStack.stackAllocs[stackSize]);
 		currentHash = combineHash((size_t(previousPtr)), currentHash);
 		currentHash = combineHash(depth * depth, currentHash);
 
-		TreeKey key(currentHash, Hash(allocStack.stackAllocs[stackSize]->str));
+		TreeKey key(currentHash, LMT_HASH_FROM_PTR(allocStack.stackAllocs[stackSize]->str));
 
 		auto pair = g_treeDictionary.update(key);
 		Edge *currentPtr = &pair->getValue();
@@ -1124,17 +1137,17 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 }
 
 template <class T>
-LMT_INLINE size_t LiveMemTracer::combineHash(const T& val, const size_t baseHash)
+LMT_INLINE LiveMemTracer::Hash LiveMemTracer::combineHash(const T& val, const LiveMemTracer::Hash baseHash)
 {
 	const uint8_t* bytes = (uint8_t*)&val;
 	const size_t count = sizeof(val);
-	const size_t FNV_offset_basis = baseHash;
-	const size_t FNV_prime = 16777619U;
+	const Hash FNV_offset_basis = baseHash;
+	const Hash FNV_prime = 16777619U;
 
-	size_t hash = FNV_offset_basis;
+	Hash hash = FNV_offset_basis;
 	for (size_t i = 0; i < count; ++i)
 	{
-		hash ^= (size_t)bytes[i];
+		hash ^= (Hash)bytes[i];
 		hash *= FNV_prime;
 	}
 
@@ -1164,7 +1177,7 @@ namespace LiveMemTracer
 			if (sizeInBytes < 0)
 			{
 				multiplier = -1.f;
-				sizeInBytes *= -1.f;
+				sizeInBytes *= -1;
 			}
 			if (sizeInBytes < 10 * 1024)
 			{
