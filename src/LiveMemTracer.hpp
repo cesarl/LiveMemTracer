@@ -285,6 +285,9 @@ namespace LiveMemTracer
 	{
 		std::ptrdiff_t count;
 		std::ptrdiff_t countCache;
+#ifdef LMT_SNAP_ACTIVATED
+		std::ptrdiff_t countSnap;
+#endif
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
@@ -305,12 +308,20 @@ namespace LiveMemTracer
 	{
 		std::ptrdiff_t count;
 		std::ptrdiff_t countCache;
+#ifdef LMT_SNAP_ACTIVATED
+		std::ptrdiff_t countSnap;
+#endif
 		Alloc *alloc;
 		LMTVector<Edge*> to;
 		Edge *from;
 		Edge *same;
 		uint8_t depth;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr) {}
+		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr)
+		{
+#ifdef LMT_SNAP_ACTIVATED
+			countSnap = 0;
+#endif
+		}
 	};
 
 	template <typename Key, typename Value, size_t Capacity>
@@ -557,6 +568,9 @@ namespace LiveMemTracer
 		void renderStack();
 		void recursiveCacheData(Edge *edge);
 		void cacheData();
+#ifdef LMT_SNAP_ACTIVATED
+		void snap();
+#endif
 		void createHistogram(Alloc *function);
 		void createHistogram(Edge  *functionCall);
 		void render(float dt);
@@ -1146,25 +1160,26 @@ namespace LiveMemTracer
 
 		float formatMemoryString(std::ptrdiff_t sizeInBytes, const char *&str)
 		{
+			float multiplier = 1.f;
 			if (sizeInBytes < 0)
 			{
-				str = "b";
-				return float(sizeInBytes);
+				multiplier = -1.f;
+				sizeInBytes *= -1.f;
 			}
 			if (sizeInBytes < 10 * 1024)
 			{
 				str = "B";
-				return float(sizeInBytes);
+				return float(sizeInBytes) * multiplier;
 			}
 			else if (sizeInBytes < 10 * 1024 * 1024)
 			{
 				str = "KiB";
-				return sizeInBytes / 1024.f;
+				return sizeInBytes / 1024.f * multiplier;
 			}
 			else
 			{
 				str = "Mb";
-				return sizeInBytes / 1024 / 1024.f;
+				return sizeInBytes / 1024 / 1024.f * multiplier;
 			}
 		}
 
@@ -1256,6 +1271,25 @@ namespace LiveMemTracer
 			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
 			cursorPos.x += 150;
 			ImGui::SetCursorPos(cursorPos);
+#ifdef LMT_SNAP_ACTIVATED
+			std::ptrdiff_t diff = callee->countCache - callee->countSnap;
+			size = formatMemoryString(diff, suffix);
+			const char *snappedSuffix;
+			float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+			if (diff > 0)
+			{
+				ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
+			}
+			else
+			{
+				ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
+			}
+			cursorPos.x += 70;
+			ImGui::SetCursorPos(cursorPos);
+			ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
+			cursorPos.x += 100;
+			ImGui::SetCursorPos(cursorPos);
+#endif
 			ImGui::Text("%s", callee->alloc->str);
 			if (callerTooltip && ImGui::IsItemHovered())
 			{
@@ -1353,8 +1387,27 @@ namespace LiveMemTracer
 				float size = formatMemoryString(callee->countCache, suffix);
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::Text("%4.0f %s", size, suffix);
-				cursorPos.x += 150 - 25;
+				cursorPos.x += 125;
 				ImGui::SetCursorPos(cursorPos);
+#ifdef LMT_SNAP_ACTIVATED
+				std::ptrdiff_t diff = callee->countCache - callee->countSnap;
+				size = formatMemoryString(diff, suffix);
+				const char *snappedSuffix;
+				float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+				if (diff > 0)
+				{
+					ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
+				}
+				else
+				{
+					ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
+				}
+				cursorPos.x += 70;
+				ImGui::SetCursorPos(cursorPos);
+				ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
+				cursorPos.x += 100;
+				ImGui::SetCursorPos(cursorPos);
+#endif
 				ImGui::Text("%s", callee->str);
 				if (opened)
 				{
@@ -1676,6 +1729,27 @@ namespace LiveMemTracer
 			}
 		}
 
+#ifdef LMT_SNAP_ACTIVATED
+		void recursiveSnap(Edge *edge)
+		{
+			edge->alloc->countSnap = edge->alloc->count;
+			edge->countSnap = edge->count;
+			for (auto &n : edge->to)
+			{
+				n->countSnap = n->count;
+				recursiveSnap(n);
+			}
+		}
+
+		void snap()
+		{
+			for (auto &r : g_allocStackRoots)
+			{
+				recursiveSnap(r);
+			}
+		}
+#endif
+
 		void renderMenu()
 		{
 			if (ImGui::BeginMenuBar())
@@ -1697,6 +1771,13 @@ namespace LiveMemTracer
 						cacheData();
 					}
 				}
+#ifdef LMT_SNAP_ACTIVATED
+				ImGui::SameLine();
+				if (ImGui::Button("Snap"))
+				{
+					snap();
+				}
+#endif
 				ImGui::SameLine();
 				if (ImGui::InputText("Search", g_searchStr, g_search_str_length))
 				{
