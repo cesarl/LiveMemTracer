@@ -198,13 +198,9 @@ namespace LiveMemTracer
 		LMTVector() : _data(nullptr), _size(0), _capacity(0) {}
 		~LMTVector()
 		{
-			for (uint16_t i = 0; i < _size; ++i)
-			{
-				_data[i].~T();
-			}
 			LMT_DEALLOC(_data);
 		}
-		void push_back(const T &o)
+		LMT_INLINE void push_back(const T &o)
 		{
 			// TODO log
 			if (_size >= _capacity)
@@ -222,6 +218,14 @@ namespace LiveMemTracer
 			}
 			reserve(size);
 			_size = size;
+		}
+		LMT_INLINE void clear()
+		{
+			for (uint16_t i = 0; i < _size; ++i)
+			{
+				_data[i].~T();
+			}
+			_size = 0;
 		}
 		LMT_INLINE T &operator[](size_t i) { return _data[i]; }
 		LMT_INLINE const T &operator[](size_t i) const { return _data[i]; }
@@ -450,7 +454,7 @@ namespace LiveMemTracer
 	static std::atomic_size_t                                   g_internalAllocations;
 #endif
 
-	static std::vector<Edge*>                                   g_allocStackRoots;
+	static LMTVector<Edge*>                                     g_allocStackRoots;
 	static std::mutex                                           g_mutex;
 
 	static std::atomic<RunningStatus>                           g_runningStatus = LMT_ATOMIC_INITIALIZER(RunningStatus::NOT_INITIALIZED);
@@ -1090,7 +1094,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, std::ptrdiff_t size, bool
 			}
 			else
 			{
-				auto it = find(std::begin(g_allocStackRoots), std::end(g_allocStackRoots), currentPtr);
+				auto it = std::find(g_allocStackRoots.begin(), g_allocStackRoots.end(), currentPtr);
 				if (it == std::end(g_allocStackRoots))
 					g_allocStackRoots.push_back(currentPtr);
 			}
