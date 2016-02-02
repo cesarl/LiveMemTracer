@@ -1341,7 +1341,7 @@ namespace LiveMemTracer
 			{
 				if (g_updateType != UpdateType::NONE || g_refeshAuto == false)
 				{
-					std::sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
+					std::stable_sort(std::begin(callee->to), std::end(callee->to), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
 				}
 				for (auto &to : callee->to)
 				{
@@ -1489,7 +1489,7 @@ namespace LiveMemTracer
 				edge = edge->same;
 			}
 
-			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
+			std::stable_sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
 
 			for (auto &caller : g_groupedEdges)
 			{
@@ -1573,7 +1573,7 @@ namespace LiveMemTracer
 				edge = edge->same;
 			}
 
-			std::sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
+			std::stable_sort(std::begin(g_groupedEdges), std::end(g_groupedEdges), SortGroupedEdge);
 
 			for (auto &callee : g_groupedEdges)
 			{
