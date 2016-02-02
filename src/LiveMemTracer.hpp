@@ -213,6 +213,13 @@ namespace LiveMemTracer
 			}
 			new (&_data[_size++]) T(o);
 		}
+		LMT_INLINE void pop_back()
+		{
+			if (_size == 0)
+				return;
+			_data[_size - 1].~T();
+			--_size;
+		}
 		LMT_INLINE void resize(Hash size)
 		{
 			if (size <= _capacity && size >= _size)
@@ -562,7 +569,7 @@ namespace LiveMemTracer
 		static const size_t                        g_search_str_length = 1024;
 		static char                                g_searchStr[g_search_str_length];
 		static DisplayType                         g_displayType = DisplayType::STACK;
-		static std::vector<Histogram>              g_histograms;
+		static LMTVector<Histogram>                g_histograms;
 		static Alloc                              *g_searchResult;
 		static Alloc                              *g_functionView;
 		static std::vector<GroupedEdge>            g_groupedEdges;
@@ -1670,7 +1677,9 @@ namespace LiveMemTracer
 					ImGui::Separator();
 				if (toDelete)
 				{
-					it = g_histograms.erase(it);
+					Histogram *last = g_histograms.end();
+					*it = *(last - 1);
+					g_histograms.pop_back();
 				}
 				else
 				{
@@ -1688,11 +1697,11 @@ namespace LiveMemTracer
 				if (h.function == function)
 					return;
 			}
-			g_histograms.resize(g_histograms.size() + 1);
-			auto &last = g_histograms.back();
-			last.function = function;
-			last.name = function->str;
-			last.isFunction = true;
+			Histogram histogram;
+			histogram.function = function;
+			histogram.name = function->str;
+			histogram.isFunction = true;
+			g_histograms.push_back(histogram);
 		}
 
 		void createHistogram(Edge *functionCall)
@@ -1702,11 +1711,11 @@ namespace LiveMemTracer
 				if (h.call == functionCall)
 					return;
 			}
-			g_histograms.resize(g_histograms.size() + 1);
-			auto &last = g_histograms.back();
-			last.call = functionCall;
-			last.name = functionCall->alloc->str;
-			last.isFunction = false;
+			Histogram histogram;
+			histogram.call = functionCall;
+			histogram.name = functionCall->alloc->str;
+			histogram.isFunction = false;
+			g_histograms.push_back(histogram);
 		}
 
 		void renderStack()
