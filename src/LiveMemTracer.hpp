@@ -1835,9 +1835,6 @@ namespace LiveMemTracer
 			bool second = false;
 			if (ImGui::Begin("LiveMemoryProfiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar))
 			{
-				ImGui::CaptureMouseFromApp();
-				ImGui::CaptureKeyboardFromApp();
-
 				renderMenu();
 				if (g_updateRatio >= 0.333f)
 				{
