@@ -70,6 +70,15 @@ static WorkerThread g_workerThread;
 #define LMT_USE_FREE ::free
 #define LMT_DEBUG_DEV 1
 
+// Activate snapping option (use more memory !)
+//#define LMT_SNAP_ACTIVATED 1
+
+#ifdef WIN64
+#define LMT_x64
+#else
+#define LMT_x86
+#endif
+
 #define LMT_STATS 1
 
 #define LMT_IMPL 1
@@ -370,6 +379,7 @@ int main(int ac, char **av)
 	float dt = 0.0f;
 	std::vector<Toto*> totoVector;
 	int clearCounter = 0;
+	int test = 10;
 	while (!glfwWindowShouldClose(window))
 	{
 		auto start = std::chrono::high_resolution_clock::now();

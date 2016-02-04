@@ -18,7 +18,7 @@ namespace LiveMemTracer
 {
 	typedef void* StackInfo;
 
-	static inline uint32_t getCallstack(size_t maxStackSize, void **stack, Hash *hash)
+	static inline uint32_t getCallstack(uint32_t maxStackSize, void **stack, Hash *hash)
 	{
 		uint32_t count = CaptureStackBackTrace(INTERNAL_FRAME_TO_SKIP, maxStackSize, stack, (PDWORD)hash);
 
