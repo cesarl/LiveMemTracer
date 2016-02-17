@@ -148,7 +148,7 @@ namespace LiveMemTracer
 	}
 #ifdef LMT_IMPL
 	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
-	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
+	static const size_t INTERNAL_FRAME_TO_SKIP = 2;
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 	static const char  *UNKNOWN_STACK_NAME = "Unknown\0";
 	static const size_t HISTORY_FRAME_NUMBER = 120;
@@ -300,14 +300,14 @@ namespace LiveMemTracer
 
 	struct Chunk
 	{
-		ptrdiff_t       allocSize[LMT_ALLOC_NUMBER_PER_CHUNK];
-		Hash                 allocHash[LMT_ALLOC_NUMBER_PER_CHUNK];
-		size_t               allocStackIndex[LMT_ALLOC_NUMBER_PER_CHUNK];
-		uint8_t              allocStackSize[LMT_ALLOC_NUMBER_PER_CHUNK];
-		void                 *stackBuffer[LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC];
-		size_t               allocIndex;
-		size_t               stackIndex;
-		Chunk                *next;
+		ptrdiff_t                allocSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		Hash                     allocHash[LMT_ALLOC_NUMBER_PER_CHUNK];
+		size_t                   allocStackIndex[LMT_ALLOC_NUMBER_PER_CHUNK];
+		uint8_t                  allocStackSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		void                     *stackBuffer[LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC];
+		size_t                   allocIndex;
+		size_t                   stackIndex;
+		Chunk                    *next;
 		std::atomic<ChunkStatus> status;
 	};
 
@@ -343,6 +343,9 @@ namespace LiveMemTracer
 #ifdef LMT_CAPTURE_ACTIVATED
 		ptrdiff_t allocSizeCapture;
 #endif
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+		ptrdiff_t instanceCount;
+#endif
 		Alloc *alloc;
 		LMTVector<Edge*> to;
 		Edge *from;
@@ -352,6 +355,9 @@ namespace LiveMemTracer
 		{
 #ifdef LMT_CAPTURE_ACTIVATED
 			allocSizeCapture = 0;
+#endif
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			instanceCount = 0;
 #endif
 		}
 	};
@@ -980,9 +986,20 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 	uint8_t found = findInCache(header->hash);
 	if (found != uint8_t(-1))
 	{
+#ifndef LMT_INSTANCE_COUNT_ACTIVATED
 		index = chunk->allocIndex - found - 1;
 		chunk->allocSize[index] += size;
 		return;
+#else
+		chunk->allocStackIndex[index] = chunk->allocStackIndex[chunk->allocIndex - found - 1];
+		chunk->allocSize[index] = size;
+		chunk->allocHash[index] = chunk->allocHash[chunk->allocIndex - found - 1];
+		chunk->allocStackSize[index] = chunk->allocStackSize[chunk->allocIndex - found - 1];
+		chunk->allocIndex += 1;
+		g_th_cache[g_th_cacheIndex] = header->hash;
+		g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
+		return;
+#endif
 	}
 
 	chunk->allocStackIndex[index] = chunk->stackIndex;
@@ -1010,9 +1027,11 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 	uint8_t found = findInCache(header->hash);
 	if (found != uint8_t(-1))
 	{
+#ifndef LMT_INSTANCE_COUNT_ACTIVATED
 		index = chunk->allocIndex - found - 1;
 		chunk->allocSize[index] -= ptrdiff_t(header->size);
 		return;
+#endif
 	}
 
 	g_th_cache[g_th_cacheIndex] = header->hash;
@@ -1023,6 +1042,12 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
 }
+
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+#define LMT_INC_INSTANCE(instance, size) instance += size > 0 ? 1 : -1
+#else
+#define LMT_INC_INSTANCE(instance, size)
+#endif
 
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
@@ -1035,9 +1060,9 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			continue;
 		auto it = g_stackDictionary.update(chunk->allocHash[i]);
 		auto &allocStack = it->getValue();
+		allocStack.allocSize += size;
 		if (allocStack.stackSize != 0)
 		{
-			allocStack.allocSize += size;
 			updateTree(allocStack, size, false);
 			for (size_t j = 0; j < allocStack.stackSize; ++j)
 			{
@@ -1045,7 +1070,6 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			}
 			continue;
 		}
-		allocStack.allocSize = size;
 		allocStack.hash = chunk->allocHash[i];
 		allocStack.stackAllocs.resize(chunk->allocStackSize[i]);
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
@@ -1084,6 +1108,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			found->getValue().shared = &shared->getValue();
 			shared->getValue().str = name;
 			shared->getValue().allocSize = size;
+
 			allocStack.stackAllocs[j] = &shared->getValue();
 			shared->getValue().next = g_allocList;
 			g_allocList = &shared->getValue();
@@ -1123,6 +1148,7 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, ptrdiff_t size, bool chec
 		auto pair = g_treeDictionary.update(key);
 		Edge *currentPtr = &pair->getValue();
 		currentPtr->allocSize += size;
+		LMT_INC_INSTANCE(currentPtr->instanceCount, size);
 		if (checkTree)
 		{
 			if (!currentPtr->alloc)
@@ -1307,6 +1333,11 @@ namespace LiveMemTracer
 			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
 			cursorPos.x += 150;
 			ImGui::SetCursorPos(cursorPos);
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			ImGui::Text("#%4u", callee->instanceCount);
+			cursorPos.x += 100;
+			ImGui::SetCursorPos(cursorPos);
+#endif
 #ifdef LMT_CAPTURE_ACTIVATED
 			ptrdiff_t diff = callee->allocSizeCache - callee->allocSizeCapture;
 			size = formatMemoryString(diff, suffix);
@@ -1873,7 +1904,7 @@ namespace LiveMemTracer
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-				if (g_updateSearch || g_updateType != UpdateType::NONE)
+				if (g_updateSearch)
 				{
 					if (strlen(g_searchStr) > 0)
 					{
