@@ -321,8 +321,8 @@ namespace LiveMemTracer
 	{
 		ptrdiff_t count;
 		ptrdiff_t countCache;
-#ifdef LMT_SNAP_ACTIVATED
-		ptrdiff_t countSnap;
+#ifdef LMT_CAPTURE_ACTIVATED
+		ptrdiff_t countCapture;
 #endif
 		const char *str;
 		Alloc *next;
@@ -344,8 +344,8 @@ namespace LiveMemTracer
 	{
 		ptrdiff_t count;
 		ptrdiff_t countCache;
-#ifdef LMT_SNAP_ACTIVATED
-		ptrdiff_t countSnap;
+#ifdef LMT_CAPTURE_ACTIVATED
+		ptrdiff_t countCapture;
 #endif
 		Alloc *alloc;
 		LMTVector<Edge*> to;
@@ -354,8 +354,8 @@ namespace LiveMemTracer
 		uint8_t depth;
 		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr)
 		{
-#ifdef LMT_SNAP_ACTIVATED
-			countSnap = 0;
+#ifdef LMT_CAPTURE_ACTIVATED
+			countCapture = 0;
 #endif
 		}
 	};
@@ -604,8 +604,8 @@ namespace LiveMemTracer
 		void renderStack();
 		void recursiveCacheData(Edge *edge);
 		void cacheData();
-#ifdef LMT_SNAP_ACTIVATED
-		void snap();
+#ifdef LMT_CAPTURE_ACTIVATED
+		void capture();
 #endif
 		void createHistogram(Alloc *function);
 		void createHistogram(Edge  *functionCall);
@@ -1311,11 +1311,11 @@ namespace LiveMemTracer
 			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
 			cursorPos.x += 150;
 			ImGui::SetCursorPos(cursorPos);
-#ifdef LMT_SNAP_ACTIVATED
-			ptrdiff_t diff = callee->countCache - callee->countSnap;
+#ifdef LMT_CAPTURE_ACTIVATED
+			ptrdiff_t diff = callee->countCache - callee->countCapture;
 			size = formatMemoryString(diff, suffix);
-			const char *snappedSuffix;
-			float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+			const char *capturedSuffix;
+			float capturedSize = formatMemoryString(callee->countCapture, capturedSuffix);
 			if (diff > 0)
 			{
 				ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1326,7 +1326,7 @@ namespace LiveMemTracer
 			}
 			cursorPos.x += 70;
 			ImGui::SetCursorPos(cursorPos);
-			ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
+			ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
 			cursorPos.x += 100;
 			ImGui::SetCursorPos(cursorPos);
 #endif
@@ -1429,11 +1429,11 @@ namespace LiveMemTracer
 				ImGui::Text("%4.0f %s", size, suffix);
 				cursorPos.x += 125;
 				ImGui::SetCursorPos(cursorPos);
-#ifdef LMT_SNAP_ACTIVATED
-				ptrdiff_t diff = callee->countCache - callee->countSnap;
+#ifdef LMT_CAPTURE_ACTIVATED
+				ptrdiff_t diff = callee->countCache - callee->countCapture;
 				size = formatMemoryString(diff, suffix);
-				const char *snappedSuffix;
-				float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+				const char *capturedSuffix;
+				float capturedSize = formatMemoryString(callee->countCapture, capturedSuffix);
 				if (diff > 0)
 				{
 					ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1444,7 +1444,7 @@ namespace LiveMemTracer
 				}
 				cursorPos.x += 70;
 				ImGui::SetCursorPos(cursorPos);
-				ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
+				ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
 				cursorPos.x += 100;
 				ImGui::SetCursorPos(cursorPos);
 #endif
@@ -1771,23 +1771,23 @@ namespace LiveMemTracer
 			}
 		}
 
-#ifdef LMT_SNAP_ACTIVATED
-		void recursiveSnap(Edge *edge)
+#ifdef LMT_CAPTURE_ACTIVATED
+		void recursiveCapture(Edge *edge)
 		{
-			edge->alloc->countSnap = edge->alloc->count;
-			edge->countSnap = edge->count;
+			edge->alloc->countCapture = edge->alloc->count;
+			edge->countCapture = edge->count;
 			for (auto &n : edge->to)
 			{
-				n->countSnap = n->count;
-				recursiveSnap(n);
+				n->countCapture = n->count;
+				recursiveCapture(n);
 			}
 		}
 
-		void snap()
+		void capture()
 		{
 			for (auto &r : g_allocStackRoots)
 			{
-				recursiveSnap(r);
+				recursiveCapture(r);
 			}
 		}
 #endif
@@ -1813,11 +1813,11 @@ namespace LiveMemTracer
 						cacheData();
 					}
 				}
-#ifdef LMT_SNAP_ACTIVATED
+#ifdef LMT_CAPTURE_ACTIVATED
 				ImGui::SameLine();
-				if (ImGui::Button("Snap"))
+				if (ImGui::Button("Capture"))
 				{
-					snap();
+					capture();
 				}
 #endif
 				ImGui::SameLine();

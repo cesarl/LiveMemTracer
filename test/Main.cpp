@@ -71,7 +71,7 @@ static WorkerThread g_workerThread;
 #define LMT_DEBUG_DEV 1
 
 // Activate snapping option (use more memory !)
-//#define LMT_SNAP_ACTIVATED 1
+#define LMT_CAPTURE_ACTIVATED 1
 
 #ifdef WIN64
 #define LMT_x64
