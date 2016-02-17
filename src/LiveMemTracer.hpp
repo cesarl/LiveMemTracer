@@ -192,8 +192,6 @@ namespace LiveMemTracer
 		return nullptr;
 	}
 
-	static size_t vectorAllocation = 0;
-
 	template <typename T>
 	class LMTVector
 	{
@@ -267,13 +265,11 @@ namespace LiveMemTracer
 	private:
 		LMT_INLINE void reserve(Hash capacity)
 		{
-			vectorAllocation -= _capacity * sizeof(T);
 			_capacity = capacity;
 			T *newData = (T*)LMT_ALLOC(_capacity * sizeof(T));
 			memcpy(newData, _data, _size * sizeof(T));
 			LMT_DEALLOC(_data);
 			_data = newData;
-			vectorAllocation += _capacity * sizeof(T);
 		}
 		T        *_data;
 		uint16_t _size;
@@ -1846,7 +1842,6 @@ namespace LiveMemTracer
 					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE) | %0.2f Mo", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio(), sizeof(g_stackDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE) | %0.2f Mo", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio(), sizeof(g_allocDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)  | %0.2f Mo", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio(), sizeof(g_treeDictionary) / 1024.f / 1024.f);
-					ImGui::Text("Vector Alloc a l'arrache %0.2f Mo", vectorAllocation / 1024.f / 1024.f);
 					ImGui::Separator();
 #endif
 					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
