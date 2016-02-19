@@ -34,7 +34,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_REALLOC_ALIGNED(ptr, size, alignment)::LiveMemTracer::reallocAligned(ptr, size, alignment)
 #define LMT_DISPLAY(dt)::LiveMemTracer::display(dt)
 #define LMT_EXIT()::LiveMemTracer::exit()
-#define LMT_INIT() INTERNAL_SCOPE; ::LiveMemTracer::SymbolGetter::init(); ::LiveMemTracer::init()
+#define LMT_INIT() ::LiveMemTracer::init()
 #define LMT_FLUSH()::LiveMemTracer::getChunk(true)
 
 #ifdef LMT_IMPL
@@ -42,7 +42,14 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #include <atomic>     //std::atomic
 #include <cstdlib>    //malloc etc...
 #include <algorithm>
+#ifdef LMT_PLATFORM_WINDOWS
+#pragma warning(push)
+#pragma warning(disable:4265)
+#endif
 #include <mutex>
+#ifdef LMT_PLATFORM_WINDOWS
+#pragma warning(pop)
+#endif
 
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 8
@@ -135,7 +142,7 @@ namespace LiveMemTracer
 	LMT_INLINE void dealloc(void *ptr);
 	LMT_INLINE void deallocAligned(void *ptr);
 	LMT_INLINE void *realloc(void *ptr, size_t size);
-	void *reallocAligned(void *ptr, size_t size, size_t alignment);
+	LMT_INLINE void *reallocAligned(void *ptr, size_t size, size_t alignment);
 	void exit();
 	void init();
 	void display(float dt);
@@ -409,9 +416,7 @@ namespace LiveMemTracer
 #ifdef LMT_STATS
 		LMT_INLINE float getHitStats() const
 		{
-			size_t total = _hitTotal;
-			size_t count = _hitCount;
-			return _hitTotal / float(_hitCount);
+			return _hitTotal.load() / float(_hitCount.load());
 		}
 
 		LMT_INLINE float getRatio() const
@@ -804,7 +809,9 @@ void LiveMemTracer::exit()
 
 void LiveMemTracer::init()
 {
+	INTERNAL_SCOPE;
 	g_runningStatus = RUNNING;
+	SymbolGetter::init();
 }
 
 
@@ -875,7 +882,6 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 
 LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 {
-	Chunk *currentChunk = nullptr;
 	const RunningStatus status = g_runningStatus;
 
 	// We initialized TLS values
@@ -1036,7 +1042,7 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 
 	g_th_cache[g_th_cacheIndex] = header->hash;
 	g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
-	chunk->allocStackIndex[index] = -1;
+	chunk->allocStackIndex[index] = size_t(-1);
 	chunk->allocSize[index] = -ptrdiff_t(header->size);
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = 0;
@@ -1317,6 +1323,8 @@ namespace LiveMemTracer
 			}
 		}
 
+#define PAD_AND_SET_IMGUI_CURSOR(cursor, pad) cursor.x += pad; ImGui::SetCursorPos(cursor)
+
 		void renderCallee(Edge *callee, bool callerTooltip)
 		{
 			if (!callee)
@@ -1331,18 +1339,16 @@ namespace LiveMemTracer
 			float size = formatMemoryString(callee->allocSizeCache, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
 			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
-			cursorPos.x += 150;
-			ImGui::SetCursorPos(cursorPos);
 #ifdef LMT_INSTANCE_COUNT_ACTIVATED
-			ImGui::Text("#%4u", callee->instanceCount);
-			cursorPos.x += 100;
-			ImGui::SetCursorPos(cursorPos);
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("%4u", callee->instanceCount);
 #endif
 #ifdef LMT_CAPTURE_ACTIVATED
 			ptrdiff_t diff = callee->allocSizeCache - callee->allocSizeCapture;
 			size = formatMemoryString(diff, suffix);
 			const char *capturedSuffix;
 			float capturedSize = formatMemoryString(callee->allocSizeCapture, capturedSuffix);
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			if (diff > 0)
 			{
 				ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1351,12 +1357,10 @@ namespace LiveMemTracer
 			{
 				ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
 			}
-			cursorPos.x += 70;
-			ImGui::SetCursorPos(cursorPos);
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
-			cursorPos.x += 100;
-			ImGui::SetCursorPos(cursorPos);
 #endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("%s", callee->alloc->str);
 			if (callerTooltip && ImGui::IsItemHovered())
 			{
@@ -1402,7 +1406,19 @@ namespace LiveMemTracer
 		void renderCallees()
 		{
 			ImGui::Separator();
-			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImVec2 cursorPos = ImGui::GetCursorPos();
+			ImGui::Text("Size");
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Count");
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Diff");
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Captured");
+#endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("Callee");
 			ImGui::Separator();
 			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1448,19 +1464,23 @@ namespace LiveMemTracer
 					ImGui::EndPopup();
 				}
 
-				cursorPos.x += 25;
+				cursorPos.x += 20;
 				cursorPos.y += 3;
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 0);
 				const char *suffix;
 				float size = formatMemoryString(callee->allocSizeCache, suffix);
-				ImGui::SetCursorPos(cursorPos);
 				ImGui::Text("%4.0f %s", size, suffix);
-				cursorPos.x += 125;
-				ImGui::SetCursorPos(cursorPos);
+				float nextPad = 80.f;
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, nextPad);
+				nextPad = 100.f;
+#endif
 #ifdef LMT_CAPTURE_ACTIVATED
 				ptrdiff_t diff = callee->allocSizeCache - callee->allocSizeCapture;
 				size = formatMemoryString(diff, suffix);
 				const char *capturedSuffix;
 				float capturedSize = formatMemoryString(callee->allocSizeCapture, capturedSuffix);
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, nextPad);
 				if (diff > 0)
 				{
 					ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1469,12 +1489,10 @@ namespace LiveMemTracer
 				{
 					ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
 				}
-				cursorPos.x += 70;
-				ImGui::SetCursorPos(cursorPos);
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 				ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
-				cursorPos.x += 100;
-				ImGui::SetCursorPos(cursorPos);
 #endif
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 				ImGui::Text("%s", callee->str);
 				if (opened)
 				{
@@ -1547,7 +1565,7 @@ namespace LiveMemTracer
 				ImVec2 cursorPosNext = ImGui::GetCursorScreenPos();
 				ImGui::SetCursorScreenPos(cursorPos);
 				ImGui::PushID(caller.alloc);
-				if (ImGui::InvisibleButton("##invisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
+				if (ImGui::InvisibleButton("##Finvisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
 				{
 					g_functionView = caller.alloc;
 					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
@@ -1768,7 +1786,19 @@ namespace LiveMemTracer
 		void renderStack()
 		{
 			ImGui::Separator();
-			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImVec2 cursorPos = ImGui::GetCursorPos();
+			ImGui::Text("Size");
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Count");
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Diff");
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Captured");
+#endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("Callee");
 			ImGui::Separator();
 			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
