@@ -34,7 +34,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_REALLOC_ALIGNED(ptr, size, alignment)::LiveMemTracer::reallocAligned(ptr, size, alignment)
 #define LMT_DISPLAY(dt)::LiveMemTracer::display(dt)
 #define LMT_EXIT()::LiveMemTracer::exit()
-#define LMT_INIT() INTERNAL_SCOPE; ::LiveMemTracer::SymbolGetter::init(); ::LiveMemTracer::init()
+#define LMT_INIT() ::LiveMemTracer::init()
 #define LMT_FLUSH()::LiveMemTracer::getChunk(true)
 
 #ifdef LMT_IMPL
@@ -42,7 +42,14 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #include <atomic>     //std::atomic
 #include <cstdlib>    //malloc etc...
 #include <algorithm>
+#ifdef LMT_PLATFORM_WINDOWS
+#pragma warning(push)
+#pragma warning(disable:4265)
+#endif
 #include <mutex>
+#ifdef LMT_PLATFORM_WINDOWS
+#pragma warning(pop)
+#endif
 
 #ifndef LMT_ALLOC_NUMBER_PER_CHUNK
 #define LMT_ALLOC_NUMBER_PER_CHUNK 1024 * 8
@@ -70,6 +77,10 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 
 #ifndef LMT_TREE_DICTIONARY_SIZE
 #define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16
+#endif
+
+#ifndef LMT_IMGUI
+#define LMT_IMGUI 1
 #endif
 
 #ifndef LMT_ASSERT
@@ -135,7 +146,7 @@ namespace LiveMemTracer
 	LMT_INLINE void dealloc(void *ptr);
 	LMT_INLINE void deallocAligned(void *ptr);
 	LMT_INLINE void *realloc(void *ptr, size_t size);
-	void *reallocAligned(void *ptr, size_t size, size_t alignment);
+	LMT_INLINE void *reallocAligned(void *ptr, size_t size, size_t alignment);
 	void exit();
 	void init();
 	void display(float dt);
@@ -148,7 +159,7 @@ namespace LiveMemTracer
 	}
 #ifdef LMT_IMPL
 	static const size_t INTERNAL_MAX_STACK_DEPTH = 255;
-	static const size_t INTERNAL_FRAME_TO_SKIP = 3;
+	static const size_t INTERNAL_FRAME_TO_SKIP = 2;
 	static const char  *TRUNCATED_STACK_NAME = "Truncated\0";
 	static const char  *UNKNOWN_STACK_NAME = "Unknown\0";
 	static const size_t HISTORY_FRAME_NUMBER = 120;
@@ -191,8 +202,6 @@ namespace LiveMemTracer
 		}
 		return nullptr;
 	}
-
-	static size_t vectorAllocation = 0;
 
 	template <typename T>
 	class LMTVector
@@ -267,13 +276,11 @@ namespace LiveMemTracer
 	private:
 		LMT_INLINE void reserve(Hash capacity)
 		{
-			vectorAllocation -= _capacity * sizeof(T);
 			_capacity = capacity;
 			T *newData = (T*)LMT_ALLOC(_capacity * sizeof(T));
 			memcpy(newData, _data, _size * sizeof(T));
 			LMT_DEALLOC(_data);
 			_data = newData;
-			vectorAllocation += _capacity * sizeof(T);
 		}
 		T        *_data;
 		uint16_t _size;
@@ -304,14 +311,14 @@ namespace LiveMemTracer
 
 	struct Chunk
 	{
-		ptrdiff_t       allocSize[LMT_ALLOC_NUMBER_PER_CHUNK];
-		Hash                 allocHash[LMT_ALLOC_NUMBER_PER_CHUNK];
-		size_t               allocStackIndex[LMT_ALLOC_NUMBER_PER_CHUNK];
-		uint8_t              allocStackSize[LMT_ALLOC_NUMBER_PER_CHUNK];
-		void                 *stackBuffer[LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC];
-		size_t               allocIndex;
-		size_t               stackIndex;
-		Chunk                *next;
+		ptrdiff_t                allocSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		Hash                     allocHash[LMT_ALLOC_NUMBER_PER_CHUNK];
+		size_t                   allocStackIndex[LMT_ALLOC_NUMBER_PER_CHUNK];
+		uint8_t                  allocStackSize[LMT_ALLOC_NUMBER_PER_CHUNK];
+		void                     *stackBuffer[LMT_ALLOC_NUMBER_PER_CHUNK * LMT_STACK_SIZE_PER_ALLOC];
+		size_t                   allocIndex;
+		size_t                   stackIndex;
+		Chunk                    *next;
 		std::atomic<ChunkStatus> status;
 	};
 
@@ -319,43 +326,49 @@ namespace LiveMemTracer
 
 	struct Alloc
 	{
-		ptrdiff_t count;
-		ptrdiff_t countCache;
-#ifdef LMT_SNAP_ACTIVATED
-		ptrdiff_t countSnap;
+		ptrdiff_t allocSize;
+		ptrdiff_t allocSizeCache;
+#ifdef LMT_CAPTURE_ACTIVATED
+		ptrdiff_t allocSizeCapture;
 #endif
 		const char *str;
 		Alloc *next;
 		Alloc *shared;
 		Edge  *edges;
-		Alloc() : count(0), countCache(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
+		Alloc() : allocSize(0), allocSizeCache(0), str(nullptr), next(nullptr), shared(nullptr), edges(nullptr) {}
 	};
 
 	struct AllocStack
 	{
-		ptrdiff_t counter;
+		ptrdiff_t allocSize;
 		LMTVector<Alloc*> stackAllocs;
 		Hash hash;
 		uint8_t stackSize;
-		AllocStack() : hash(0), counter(0), stackSize(0) {}
+		AllocStack() : hash(0), allocSize(0), stackSize(0) {}
 	};
 
 	struct Edge
 	{
-		ptrdiff_t count;
-		ptrdiff_t countCache;
-#ifdef LMT_SNAP_ACTIVATED
-		ptrdiff_t countSnap;
+		ptrdiff_t allocSize;
+		ptrdiff_t allocSizeCache;
+#ifdef LMT_CAPTURE_ACTIVATED
+		ptrdiff_t allocSizeCapture;
+#endif
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+		ptrdiff_t instanceCount;
 #endif
 		Alloc *alloc;
 		LMTVector<Edge*> to;
 		Edge *from;
 		Edge *same;
 		uint8_t depth;
-		Edge() : count(0), alloc(nullptr), from(nullptr), same(nullptr)
+		Edge() : allocSize(0), alloc(nullptr), from(nullptr), same(nullptr)
 		{
-#ifdef LMT_SNAP_ACTIVATED
-			countSnap = 0;
+#ifdef LMT_CAPTURE_ACTIVATED
+			allocSizeCapture = 0;
+#endif
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			instanceCount = 0;
 #endif
 		}
 	};
@@ -407,9 +420,7 @@ namespace LiveMemTracer
 #ifdef LMT_STATS
 		LMT_INLINE float getHitStats() const
 		{
-			size_t total = _hitTotal;
-			size_t count = _hitCount;
-			return _hitTotal / float(_hitCount);
+			return _hitTotal.load() / float(_hitCount.load());
 		}
 
 		LMT_INLINE float getRatio() const
@@ -543,12 +554,12 @@ namespace LiveMemTracer
 			Edge  *call;
 			const char *name;
 			bool  isFunction;
-			ptrdiff_t count[HISTORY_FRAME_NUMBER];
+			ptrdiff_t allocSize[HISTORY_FRAME_NUMBER];
 			int  cursor;
-			ptrdiff_t countCache;
-			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), countCache(0)
+			ptrdiff_t allocSizeCache;
+			Histogram() : function(nullptr), call(nullptr), name(nullptr), isFunction(false), cursor(0), allocSizeCache(0)
 			{
-				memset(count, 0, sizeof(count));
+				memset(allocSize, 0, sizeof(allocSize));
 			}
 		};
 
@@ -579,7 +590,7 @@ namespace LiveMemTracer
 		struct GroupedEdge
 		{
 			Alloc     *alloc;
-			ptrdiff_t  count;
+			ptrdiff_t  allocSize;
 		};
 
 		static bool                                g_refeshAuto = true;
@@ -604,8 +615,8 @@ namespace LiveMemTracer
 		void renderStack();
 		void recursiveCacheData(Edge *edge);
 		void cacheData();
-#ifdef LMT_SNAP_ACTIVATED
-		void snap();
+#ifdef LMT_CAPTURE_ACTIVATED
+		void capture();
 #endif
 		void createHistogram(Alloc *function);
 		void createHistogram(Edge  *functionCall);
@@ -802,7 +813,9 @@ void LiveMemTracer::exit()
 
 void LiveMemTracer::init()
 {
+	INTERNAL_SCOPE;
 	g_runningStatus = RUNNING;
+	SymbolGetter::init();
 }
 
 
@@ -873,7 +886,6 @@ LiveMemTracer::Chunk *LiveMemTracer::createPreallocatedChunk(const RunningStatus
 
 LiveMemTracer::Chunk *LiveMemTracer::getChunk(bool forceFlush /*= false*/)
 {
-	Chunk *currentChunk = nullptr;
 	const RunningStatus status = g_runningStatus;
 
 	// We initialized TLS values
@@ -984,9 +996,20 @@ void LiveMemTracer::logAllocInChunk(LiveMemTracer::Header *header, size_t size)
 	uint8_t found = findInCache(header->hash);
 	if (found != uint8_t(-1))
 	{
+#ifndef LMT_INSTANCE_COUNT_ACTIVATED
 		index = chunk->allocIndex - found - 1;
 		chunk->allocSize[index] += size;
 		return;
+#else
+		chunk->allocStackIndex[index] = chunk->allocStackIndex[chunk->allocIndex - found - 1];
+		chunk->allocSize[index] = size;
+		chunk->allocHash[index] = chunk->allocHash[chunk->allocIndex - found - 1];
+		chunk->allocStackSize[index] = chunk->allocStackSize[chunk->allocIndex - found - 1];
+		chunk->allocIndex += 1;
+		g_th_cache[g_th_cacheIndex] = header->hash;
+		g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
+		return;
+#endif
 	}
 
 	chunk->allocStackIndex[index] = chunk->stackIndex;
@@ -1014,19 +1037,27 @@ void LiveMemTracer::logFreeInChunk(LiveMemTracer::Header *header)
 	uint8_t found = findInCache(header->hash);
 	if (found != uint8_t(-1))
 	{
+#ifndef LMT_INSTANCE_COUNT_ACTIVATED
 		index = chunk->allocIndex - found - 1;
 		chunk->allocSize[index] -= ptrdiff_t(header->size);
 		return;
+#endif
 	}
 
 	g_th_cache[g_th_cacheIndex] = header->hash;
 	g_th_cacheIndex = (g_th_cacheIndex + 1) % LMT_CACHE_SIZE;
-	chunk->allocStackIndex[index] = -1;
+	chunk->allocStackIndex[index] = size_t(-1);
 	chunk->allocSize[index] = -ptrdiff_t(header->size);
 	chunk->allocHash[index] = header->hash;
 	chunk->allocStackSize[index] = 0;
 	chunk->allocIndex += 1;
 }
+
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+#define LMT_INC_INSTANCE(instance, size) instance += size > 0 ? 1 : -1
+#else
+#define LMT_INC_INSTANCE(instance, size)
+#endif
 
 void LiveMemTracer::treatChunk(Chunk *chunk)
 {
@@ -1039,17 +1070,16 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			continue;
 		auto it = g_stackDictionary.update(chunk->allocHash[i]);
 		auto &allocStack = it->getValue();
+		allocStack.allocSize += size;
 		if (allocStack.stackSize != 0)
 		{
-			allocStack.counter += size;
 			updateTree(allocStack, size, false);
 			for (size_t j = 0; j < allocStack.stackSize; ++j)
 			{
-				allocStack.stackAllocs[j]->count += size;
+				allocStack.stackAllocs[j]->allocSize += size;
 			}
 			continue;
 		}
-		allocStack.counter = size;
 		allocStack.hash = chunk->allocHash[i];
 		allocStack.stackAllocs.resize(chunk->allocStackSize[i]);
 		for (size_t j = 0, jend = chunk->allocStackSize[i]; j < jend; ++j)
@@ -1059,14 +1089,14 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			if (found->getValue().shared != nullptr)
 			{
 				auto shared = found->getValue().shared;
-				shared->count += size;
+				shared->allocSize += size;
 				allocStack.stackAllocs[j] = shared;
 				continue;
 			}
 			if (found->getValue().str != nullptr)
 			{
 				allocStack.stackAllocs[j] = &found->getValue();
-				found->getValue().count += size;
+				found->getValue().allocSize += size;
 				continue;
 			}
 			void *absoluteAddress = nullptr;
@@ -1077,7 +1107,7 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 			{
 				found->getValue().shared = &shared->getValue();
 				allocStack.stackAllocs[j] = &shared->getValue();
-				shared->getValue().count += size;
+				shared->getValue().allocSize += size;
 #ifdef LMT_PLATFORM_WINDOWS
 				if (name != TRUNCATED_STACK_NAME)
 					LMT_USE_FREE((void*)name);
@@ -1087,7 +1117,8 @@ void LiveMemTracer::treatChunk(Chunk *chunk)
 
 			found->getValue().shared = &shared->getValue();
 			shared->getValue().str = name;
-			shared->getValue().count = size;
+			shared->getValue().allocSize = size;
+
 			allocStack.stackAllocs[j] = &shared->getValue();
 			shared->getValue().next = g_allocList;
 			g_allocList = &shared->getValue();
@@ -1126,7 +1157,8 @@ void LiveMemTracer::updateTree(AllocStack &allocStack, ptrdiff_t size, bool chec
 
 		auto pair = g_treeDictionary.update(key);
 		Edge *currentPtr = &pair->getValue();
-		currentPtr->count += size;
+		currentPtr->allocSize += size;
+		LMT_INC_INSTANCE(currentPtr->instanceCount, size);
 		if (checkTree)
 		{
 			if (!currentPtr->alloc)
@@ -1181,7 +1213,7 @@ LMT_INLINE LiveMemTracer::Hash LiveMemTracer::combineHash(const T& val, const Li
 	return hash;
 }
 
-#ifdef LMT_IMGUI
+#if LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
 namespace LiveMemTracer
@@ -1190,7 +1222,7 @@ namespace LiveMemTracer
 	{
 		static bool SortGroupedEdge(const GroupedEdge &a, const GroupedEdge &b)
 		{
-			return a.count > b.count;
+			return a.allocSize > b.allocSize;
 		}
 
 		static bool InsertSortedEdge(const GroupedEdge &a, const GroupedEdge &b)
@@ -1252,13 +1284,13 @@ namespace LiveMemTracer
 				hasChanged = false;
 				Alloc **pv = &g_searchResult;
 				Alloc *nd = g_searchResult;
-				nd->countCache = nd->count;
+				nd->allocSizeCache = nd->allocSize;
 				Alloc *nx = g_searchResult->next;
 
 				while (nx)
 				{
-					nx->countCache = nx->count;
-					if (nd->countCache < nx->countCache)
+					nx->allocSizeCache = nx->allocSize;
+					if (nd->allocSizeCache < nx->allocSizeCache)
 					{
 						nd->next = nx->next;
 						nx->next = nd;
@@ -1295,6 +1327,8 @@ namespace LiveMemTracer
 			}
 		}
 
+#define PAD_AND_SET_IMGUI_CURSOR(cursor, pad) cursor.x += pad; ImGui::SetCursorPos(cursor)
+
 		void renderCallee(Edge *callee, bool callerTooltip)
 		{
 			if (!callee)
@@ -1304,18 +1338,21 @@ namespace LiveMemTracer
 			const char *suffix;
 			if (g_updateType != UpdateType::NONE)
 			{
-				callee->countCache = callee->count;
+				callee->allocSizeCache = callee->allocSize;
 			}
-			float size = formatMemoryString(callee->countCache, suffix);
+			float size = formatMemoryString(callee->allocSizeCache, suffix);
 			auto cursorPos = ImGui::GetCursorPos();
 			const bool opened = ImGui::TreeNode(callee, "%4.0f %s", size, suffix);
-			cursorPos.x += 150;
-			ImGui::SetCursorPos(cursorPos);
-#ifdef LMT_SNAP_ACTIVATED
-			ptrdiff_t diff = callee->countCache - callee->countSnap;
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("%4u", callee->instanceCount);
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+			ptrdiff_t diff = callee->allocSizeCache - callee->allocSizeCapture;
 			size = formatMemoryString(diff, suffix);
-			const char *snappedSuffix;
-			float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+			const char *capturedSuffix;
+			float capturedSize = formatMemoryString(callee->allocSizeCapture, capturedSuffix);
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			if (diff > 0)
 			{
 				ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1324,12 +1361,10 @@ namespace LiveMemTracer
 			{
 				ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
 			}
-			cursorPos.x += 70;
-			ImGui::SetCursorPos(cursorPos);
-			ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
-			cursorPos.x += 100;
-			ImGui::SetCursorPos(cursorPos);
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
 #endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("%s", callee->alloc->str);
 			if (callerTooltip && ImGui::IsItemHovered())
 			{
@@ -1361,7 +1396,7 @@ namespace LiveMemTracer
 			{
 				if (g_updateType != UpdateType::NONE || g_refeshAuto == false)
 				{
-					std::stable_sort(callee->to.begin(), callee->to.end(), [](Edge *a, Edge *b){ return a->countCache > b->countCache; });
+					std::stable_sort(callee->to.begin(), callee->to.end(), [](Edge *a, Edge *b){ return a->allocSizeCache > b->allocSizeCache; });
 				}
 				for (auto &to : callee->to)
 				{
@@ -1375,7 +1410,19 @@ namespace LiveMemTracer
 		void renderCallees()
 		{
 			ImGui::Separator();
-			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImVec2 cursorPos = ImGui::GetCursorPos();
+			ImGui::Text("Size");
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Count");
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Diff");
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Captured");
+#endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("Callee");
 			ImGui::Separator();
 			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1421,19 +1468,23 @@ namespace LiveMemTracer
 					ImGui::EndPopup();
 				}
 
-				cursorPos.x += 25;
+				cursorPos.x += 20;
 				cursorPos.y += 3;
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 0);
 				const char *suffix;
-				float size = formatMemoryString(callee->countCache, suffix);
-				ImGui::SetCursorPos(cursorPos);
+				float size = formatMemoryString(callee->allocSizeCache, suffix);
 				ImGui::Text("%4.0f %s", size, suffix);
-				cursorPos.x += 125;
-				ImGui::SetCursorPos(cursorPos);
-#ifdef LMT_SNAP_ACTIVATED
-				ptrdiff_t diff = callee->countCache - callee->countSnap;
+				float nextPad = 80.f;
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, nextPad);
+				nextPad = 100.f;
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+				ptrdiff_t diff = callee->allocSizeCache - callee->allocSizeCapture;
 				size = formatMemoryString(diff, suffix);
-				const char *snappedSuffix;
-				float snappedSize = formatMemoryString(callee->countSnap, snappedSuffix);
+				const char *capturedSuffix;
+				float capturedSize = formatMemoryString(callee->allocSizeCapture, capturedSuffix);
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, nextPad);
 				if (diff > 0)
 				{
 					ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "%4.0f %s", size, suffix);
@@ -1442,12 +1493,10 @@ namespace LiveMemTracer
 				{
 					ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "%4.0f %s", size, suffix);
 				}
-				cursorPos.x += 70;
-				ImGui::SetCursorPos(cursorPos);
-				ImGui::Text("[%4.0f %s]", snappedSize, snappedSuffix);
-				cursorPos.x += 100;
-				ImGui::SetCursorPos(cursorPos);
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+				ImGui::Text("[%4.0f %s]", capturedSize, capturedSuffix);
 #endif
+				PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 				ImGui::Text("%s", callee->str);
 				if (opened)
 				{
@@ -1455,7 +1504,7 @@ namespace LiveMemTracer
 					Edge *edge = callee->edges;
 					while (edge)
 					{
-						auto it = std::lower_bound(g_sortedEdges.begin(), g_sortedEdges.end(), edge, [](const Edge *a, const Edge *b){ return a->countCache > b->countCache; });
+						auto it = std::lower_bound(g_sortedEdges.begin(), g_sortedEdges.end(), edge, [](const Edge *a, const Edge *b){ return a->allocSizeCache > b->allocSizeCache; });
 						if (it == g_sortedEdges.end() || *it != edge)
 						{
 							g_sortedEdges.insert(it, edge);
@@ -1493,18 +1542,18 @@ namespace LiveMemTracer
 					GroupedEdge group;
 					if (g_updateType != UpdateType::NONE)
 					{
-						edge->countCache = edge->count;
+						edge->allocSizeCache = edge->allocSize;
 					}
 					group.alloc = edge->from->alloc;
-					group.count = 0;
+					group.allocSize = 0;
 
 					auto it = std::lower_bound(g_groupedEdges.begin(), g_groupedEdges.end(), group, InsertSortedEdge);
 					if (it == g_groupedEdges.end() || it->alloc != group.alloc)
 					{
 						it = g_groupedEdges.insert(it, group);
 					}
-					total += edge->countCache;
-					it->count += edge->countCache;
+					total += edge->allocSizeCache;
+					it->allocSize += edge->allocSizeCache;
 				}
 				edge = edge->same;
 			}
@@ -1515,12 +1564,12 @@ namespace LiveMemTracer
 			{
 				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
-				float size = formatMemoryString(caller.count, suffix);
+				float size = formatMemoryString(caller.allocSize, suffix);
 				ImGui::TextWrapped("%s\n%4.0f%s", caller.alloc->str, size, suffix);
 				ImVec2 cursorPosNext = ImGui::GetCursorScreenPos();
 				ImGui::SetCursorScreenPos(cursorPos);
 				ImGui::PushID(caller.alloc);
-				if (ImGui::InvisibleButton("##invisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
+				if (ImGui::InvisibleButton("##Finvisible", ImVec2(ImGui::GetColumnWidth(), cursorPosNext.y - cursorPos.y)))
 				{
 					g_functionView = caller.alloc;
 					g_updateType = UpdateType::CURRENT_AND_NEXT_FRAME;
@@ -1535,7 +1584,7 @@ namespace LiveMemTracer
 					ImGui::EndPopup();
 				}
 				ImGui::PopID();
-				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(caller.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
+				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(caller.allocSize) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
 
 			//////////////////////////////////////////////////////////////////////////
@@ -1545,9 +1594,9 @@ namespace LiveMemTracer
 			const char *suffix;
 			if (g_updateType != UpdateType::NONE)
 			{
-				g_functionView->countCache = g_functionView->count;
+				g_functionView->allocSizeCache = g_functionView->allocSize;
 			}
-			float size = formatMemoryString(g_functionView->countCache, suffix);
+			float size = formatMemoryString(g_functionView->allocSizeCache, suffix);
 			ImGui::TextWrapped("%s\n%4.0f%s", g_functionView->str, size, suffix);
 			ImGui::PushID(g_functionView);
 			if (ImGui::BeginPopupContextItem("Options"))
@@ -1576,10 +1625,10 @@ namespace LiveMemTracer
 					GroupedEdge group;
 					if (g_updateType != UpdateType::NONE)
 					{
-						to->countCache = to->count;
+						to->allocSizeCache = to->allocSize;
 					}
 					group.alloc = to->alloc;
-					group.count = 0;
+					group.allocSize = 0;
 
 					auto it = std::lower_bound(g_groupedEdges.begin(), g_groupedEdges.end(), group, InsertSortedEdge);
 					if (it == g_groupedEdges.end() || it->alloc != group.alloc)
@@ -1587,8 +1636,8 @@ namespace LiveMemTracer
 						it = g_groupedEdges.insert(it, group);
 					}
 
-					it->count += to->countCache;
-					total += to->countCache;
+					it->allocSize += to->allocSizeCache;
+					total += to->allocSizeCache;
 				}
 				edge = edge->same;
 			}
@@ -1599,7 +1648,7 @@ namespace LiveMemTracer
 			{
 				ImVec2 cursorPos = ImGui::GetCursorScreenPos();
 				const char *suffix;
-				float size = formatMemoryString(callee.count, suffix);
+				float size = formatMemoryString(callee.allocSize, suffix);
 				ImGui::TextWrapped("%s\n%4.0f%s", callee.alloc->str, size, suffix);
 				ImVec2 cursorPosNext = ImGui::GetCursorScreenPos();
 				ImGui::SetCursorScreenPos(cursorPos);
@@ -1619,7 +1668,7 @@ namespace LiveMemTracer
 					ImGui::EndPopup();
 				}
 				ImGui::PopID();
-				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(callee.count) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
+				ImGui::GetWindowDrawList()->AddRectFilled(cursorPos, ImVec2(cursorPos.x + float(callee.allocSize) / total * ImGui::GetColumnWidth(), ImGui::GetCursorScreenPos().y), 0x3F025CAB);
 			}
 
 			ImGui::Columns(1);
@@ -1643,7 +1692,7 @@ namespace LiveMemTracer
 				ImGui::BeginGroup();
 				ImGui::TextColored(h.isFunction ? ImColor(217, 164, 22) : ImColor(209, 6, 145), "%s", h.isFunction ? "Function" : "Call"); ImGui::SameLine();
 				const char *suffix;
-				float size = formatMemoryString(h.countCache, suffix);
+				float size = formatMemoryString(h.allocSizeCache, suffix);
 				ImGui::Text("%4.0f %s", size, suffix);
 				if (h.isFunction == false)
 				{
@@ -1663,7 +1712,7 @@ namespace LiveMemTracer
 					ImGui::SetTooltip(h.name);
 				}
 				ImVec2 cursorPos = ImGui::GetCursorPos();
-				ImGui::PlotLines("##NoName", (const float*)h.count, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, graphSize, sizeof(ptrdiff_t));
+				ImGui::PlotLines("##NoName", (const float*)h.allocSize, HISTORY_FRAME_NUMBER, h.cursor, nullptr, 0, FLT_MAX, graphSize, sizeof(ptrdiff_t));
 				ImGui::SetCursorPos(cursorPos);
 				ImGui::InvisibleButton("##invisibleButton", graphSize);
 				if (ImGui::IsItemHovered())
@@ -1678,7 +1727,7 @@ namespace LiveMemTracer
 					ImGui::SetTooltip("");
 					ImGui::BeginTooltip();
 					const char *ttSuffix;
-					float ttSize = formatMemoryString(h.count[itemIndex], ttSuffix);
+					float ttSize = formatMemoryString(h.allocSize[itemIndex], ttSuffix);
 					ImGui::Text("%4.0f %s", ttSize, ttSuffix);
 					ImGui::EndTooltip();
 				}
@@ -1741,7 +1790,19 @@ namespace LiveMemTracer
 		void renderStack()
 		{
 			ImGui::Separator();
-			ImGui::Text("Size"); ImGui::SameLine(150);
+			ImVec2 cursorPos = ImGui::GetCursorPos();
+			ImGui::Text("Size");
+#ifdef LMT_INSTANCE_COUNT_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Count");
+#endif
+#ifdef LMT_CAPTURE_ACTIVATED
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Diff");
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
+			ImGui::Text("Captured");
+#endif
+			PAD_AND_SET_IMGUI_CURSOR(cursorPos, 100);
 			ImGui::Text("Callee");
 			ImGui::Separator();
 			ImGui::BeginChild("Content", ImGui::GetWindowContentRegionMax(), false, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1754,10 +1815,10 @@ namespace LiveMemTracer
 
 		void recursiveCacheData(Edge *edge)
 		{
-			edge->alloc->countCache = edge->alloc->count;
+			edge->alloc->allocSizeCache = edge->alloc->allocSize;
 			for (auto &n : edge->to)
 			{
-				n->countCache = n->count;
+				n->allocSizeCache = n->allocSize;
 				recursiveCacheData(n);
 			}
 		}
@@ -1766,28 +1827,28 @@ namespace LiveMemTracer
 		{
 			for (auto &r : g_allocStackRoots)
 			{
-				r->countCache = r->count;
+				r->allocSizeCache = r->allocSize;
 				recursiveCacheData(r);
 			}
 		}
 
-#ifdef LMT_SNAP_ACTIVATED
-		void recursiveSnap(Edge *edge)
+#ifdef LMT_CAPTURE_ACTIVATED
+		void recursiveCapture(Edge *edge)
 		{
-			edge->alloc->countSnap = edge->alloc->count;
-			edge->countSnap = edge->count;
+			edge->alloc->allocSizeCapture = edge->alloc->allocSize;
+			edge->allocSizeCapture = edge->allocSize;
 			for (auto &n : edge->to)
 			{
-				n->countSnap = n->count;
-				recursiveSnap(n);
+				n->allocSizeCapture = n->allocSize;
+				recursiveCapture(n);
 			}
 		}
 
-		void snap()
+		void capture()
 		{
 			for (auto &r : g_allocStackRoots)
 			{
-				recursiveSnap(r);
+				recursiveCapture(r);
 			}
 		}
 #endif
@@ -1813,11 +1874,11 @@ namespace LiveMemTracer
 						cacheData();
 					}
 				}
-#ifdef LMT_SNAP_ACTIVATED
+#ifdef LMT_CAPTURE_ACTIVATED
 				ImGui::SameLine();
-				if (ImGui::Button("Snap"))
+				if (ImGui::Button("Capture"))
 				{
-					snap();
+					capture();
 				}
 #endif
 				ImGui::SameLine();
@@ -1846,7 +1907,6 @@ namespace LiveMemTracer
 					ImGui::Text("Stack dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_STACK_DICTIONARY_SIZE) | %0.2f Mo", g_stackDictionary.getHitStats(), g_stackDictionary.getRatio(), sizeof(g_stackDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Alloc dictionary : %0.2f iterations per search | filled : %0.2f%% (LMT_ALLOC_DICTIONARY_SIZE) | %0.2f Mo", g_allocDictionary.getHitStats(), g_allocDictionary.getRatio(), sizeof(g_allocDictionary) / 1024.f / 1024.f);
 					ImGui::Text("Tree dictionary  : %0.2f iterations per search | filled : %0.2f%% (LMT_TREE_DICTIONARY_SIZE)  | %0.2f Mo", g_treeDictionary.getHitStats(), g_treeDictionary.getRatio(), sizeof(g_treeDictionary) / 1024.f / 1024.f);
-					ImGui::Text("Vector Alloc a l'arrache %0.2f Mo", vectorAllocation / 1024.f / 1024.f);
 					ImGui::Separator();
 #endif
 					ImGui::TextWrapped("Note that dictionaries are allocated at init and are not resizable. If you enable LMT_DEBUG_DEV a full dictionary will trigger an assert, if not execution will continue but statistics can be corrupted.\nThe more the dictionary is full, the more the number of iterations increase when searching into dictionary, a 90%% full dictionary is a bad idea.");
@@ -1878,7 +1938,7 @@ namespace LiveMemTracer
 				ImGui::Separator();
 
 				std::lock_guard<std::mutex> lock(g_mutex);
-				if (g_updateSearch || g_updateType != UpdateType::NONE)
+				if (g_updateSearch)
 				{
 					if (strlen(g_searchStr) > 0)
 					{
@@ -1912,13 +1972,13 @@ namespace LiveMemTracer
 				{
 					if (h.isFunction)
 					{
-						h.countCache = h.function->count;
-						h.count[h.cursor] = h.countCache;
+						h.allocSizeCache = h.function->allocSize;
+						h.allocSize[h.cursor] = h.allocSizeCache;
 					}
 					else
 					{
-						h.countCache = h.call->count;
-						h.count[h.cursor] = h.countCache;
+						h.allocSizeCache = h.call->allocSize;
+						h.allocSize[h.cursor] = h.allocSizeCache;
 					}
 					h.cursor = (h.cursor + 1) % HISTORY_FRAME_NUMBER;
 				}
