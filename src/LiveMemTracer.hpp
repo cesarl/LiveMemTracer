@@ -79,6 +79,10 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #define LMT_TREE_DICTIONARY_SIZE 1024 * 16 * 16
 #endif
 
+#ifndef LMT_IMGUI
+#define LMT_IMGUI 1
+#endif
+
 #ifndef LMT_ASSERT
 #define LMT_ASSERT(condition, message) assert(condition)
 #endif
@@ -1209,7 +1213,7 @@ LMT_INLINE LiveMemTracer::Hash LiveMemTracer::combineHash(const T& val, const Li
 	return hash;
 }
 
-#ifdef LMT_IMGUI
+#if LMT_IMGUI
 #include LMT_IMGUI_INCLUDE_PATH
 
 namespace LiveMemTracer
