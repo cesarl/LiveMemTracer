@@ -13,26 +13,53 @@ Features
 - Inspect stack
 - Search for callee
 - Trace functions or stacked calls
+- Detailed function view
 - Header only, easy to setup
 - Orbis version (contact me)
 
 Inspect stack
 
-![Stack](http://i.imgur.com/mHTGEiL.png "Stack")
+![Stack](http://i.imgur.com/pi8HJnj.png "Stack")
 
 Search for callee
 
-![Callee](http://i.imgur.com/7uIg8VZ.png "Callee")
+![Callee](http://i.imgur.com/IqpkcGS.png "Callee")
 
 Trace functions and stacked calls
 
-![Histograms](http://i.imgur.com/X6FatFn.png "Histograms")
+![Histograms](http://i.imgur.com/8gUFZER.png "Histograms")
+
+Detailed function view
+
+![Detailed](http://i.imgur.com/QEgvGsy.png "Detailed")
 
 Using it
 --------
 
 Define LiveMemTracer settings :
 ```cpp
+
+    // Will enable "capture" feature :
+    // Capture all stack infos and display diff between capture state
+    // and current state.
+    // (use more memory)
+    #define LMT_CAPTURE_ACTIVATED 1
+
+    // Will enable "instance count" feature :
+    // Display the number of time functions allocate
+    // Increment at allocation, decrement at free
+    // (use more memory)
+    #define LMT_INSTANCE_COUNT_ACTIVATED 1
+
+    // Add more stats to "(?)" menu tooltip
+    // Made it easy to setup dictionary size
+    #define LMT_STATS 1
+
+    // Define platform
+    #define LMT_x64
+    // Or
+    #define LMT_x86
+
     // Number of allocs register per chunks
     // Adapt it to the number of allocations your program do
     // ( default : 1024 * 8 )
@@ -55,6 +82,9 @@ Define LiveMemTracer settings :
 
     // ImGui header path
     #define LMT_IMGUI_INCLUDE_PATH "External/imgui/imgui.h"
+
+    // Disable imgui
+    #define LMT_IMGUI 0
 
     // Allocation dictionnary max entry
     // ( default : 1024 * 16 )
