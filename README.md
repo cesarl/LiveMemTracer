@@ -105,7 +105,7 @@ Define LiveMemTracer settings :
     #define LMT_USE_FREE ::free
 
     // Your assert function
-    #define LMT_ASSERT(condition, message) assert(condition)
+    #define LMT_ASSERT(condition, message, ...) assert(condition)
 
     // Important if you want that LiveMemTracer treat allocation chunks asynchronously :
     // You can override it and ask to LMT to do the job differently.

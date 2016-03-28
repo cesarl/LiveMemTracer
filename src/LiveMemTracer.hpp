@@ -84,7 +84,7 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #endif
 
 #ifndef LMT_ASSERT
-#define LMT_ASSERT(condition, message) assert(condition)
+#define LMT_ASSERT(condition, message, ...) assert(condition)
 #endif
 
 #ifndef LMT_TREAT_CHUNK
@@ -92,9 +92,9 @@ Code and documentation https://github.com/cesarl/LiveMemTracer
 #endif
 
 #ifndef LMT_DEBUG_DEV
-#define LMT_DEBUG_ASSERT(condition, message) do{}while(0)
+#define LMT_DEBUG_ASSERT(condition, message, ...) do{}while(0)
 #else
-#define LMT_DEBUG_ASSERT(condition, message) LMT_ASSERT(condition, message)
+#define LMT_DEBUG_ASSERT(condition, message, ...) LMT_ASSERT(condition, message, ##__VA_ARGS__)
 #endif
 
 #ifndef LMT_IMPLEMENTED
@@ -380,7 +380,8 @@ namespace LiveMemTracer
 		static const size_t   HASH_EMPTY = Hash(-1);
 		static const size_t   HASH_INVALID = Hash(-2);
 
-		Dictionary()
+		Dictionary(const char *name)
+			:_name(name)
 		{
 		}
 
@@ -431,6 +432,7 @@ namespace LiveMemTracer
 #endif
 	private:
 		Pair _buffer[Capacity];
+		const char *_name;
 #ifdef LMT_STATS
 		mutable std::atomic_size_t _hitCount;
 		mutable std::atomic_size_t _hitTotal;
@@ -454,7 +456,7 @@ namespace LiveMemTracer
 #ifdef LMT_STATS
 			_hitTotal += Capacity - 1;
 #endif
-			LMT_DEBUG_ASSERT(false, "LMT : Dictionary is full.");
+			LMT_DEBUG_ASSERT(false, "LMT : Dictionary %s is full.", _name);
 			return HASH_INVALID;
 		}
 	};
@@ -502,9 +504,9 @@ namespace LiveMemTracer
 		Hash str;
 	};
 
-	static Dictionary<Hash, AllocStack, LMT_STACK_DICTIONARY_SIZE>    g_stackDictionary;
-	static Dictionary<Hash, Alloc, LMT_ALLOC_DICTIONARY_SIZE>         g_allocDictionary;
-	static Dictionary<TreeKey, Edge, LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary;
+	static Dictionary<Hash, AllocStack, LMT_STACK_DICTIONARY_SIZE>    g_stackDictionary("STACK_DICTIONARY");
+	static Dictionary<Hash, Alloc, LMT_ALLOC_DICTIONARY_SIZE>         g_allocDictionary("ALLOC_DICTIONARY");
+	static Dictionary<TreeKey, Edge, LMT_TREE_DICTIONARY_SIZE>        g_treeDictionary("TREE_DICTIONARY");
 
 #ifdef LMT_STATS
 	static std::atomic_size_t                                   g_userAllocations;
